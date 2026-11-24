@@ -1,0 +1,2520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+<meta http-equiv="Pragma" content="no-cache"/>
+<meta http-equiv="Expires" content="0"/>
+<title>Fleet Dashboard</title>
+
+<!-- ── LEAFLET ── -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<style>
+  /* ═══════════════════════════════════════════════════════════════════
+     DESIGN TOKENS - the one palette. Everything below uses these variables.
+     Light is the default; body.dark-mode overrides the surface, text and soft status colours.
+     ═══════════════════════════════════════════════════════════════════ */
+  :root {
+    --font: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+
+    /* surfaces and text */
+    --bg: #edf2f4;            /* page */
+    --card: #ffffff;          /* every card / panel */
+    --card-2: #f3f7f8;        /* inset areas: share box, hover, inputs */
+    --border: #d3dfe3;
+    --text: #10282f;
+    --muted: #556d76;
+
+    /* brand: deep teal primary, one violet accent */
+    --primary: #0b5563;
+    --primary-hover: #083f4a;
+    --on-primary: #ffffff;
+    --primary-soft: #dcecef;
+    --link: #0b5563;
+    --accent: #6a4fd1;
+    --accent-soft: #ebe7fa;
+
+    /* shape, spacing and type scale (shared by every card) */
+    --radius: 12px;
+    --radius-sm: 8px;
+    --pad: 14px;
+    --gap: 14px;
+    --fs-label: 10px;         /* small uppercase labels, table headers, badges */
+    --fs-small: 11px;
+    --fs-body: 12px;
+    --fs-title: 15px;
+    --fs-kpi: 26px;
+    --shadow: 0 1px 2px rgba(16, 40, 47, 0.06);
+
+    /* status: one solid colour (markers, bars, icons) + readable text/background/border for badges */
+    --st-moving: #1b8a5a;     --st-moving-fg: #0b5d3b;     --st-moving-bg: #def3e8;     --st-moving-bd: #a6dcc0;
+    --st-paused: #b7791f;     --st-paused-fg: #744a0a;     --st-paused-bg: #fbefcf;     --st-paused-bd: #ecd08a;
+    --st-stopped: #cc3b47;    --st-stopped-fg: #9b1c27;    --st-stopped-bg: #fce3e5;    --st-stopped-bd: #f0a9ae;
+    --st-arrived: #3a7ae0;    --st-arrived-fg: #1c4a9c;    --st-arrived-bg: #deeafb;    --st-arrived-bd: #a9c5ee;
+    --st-delayed: #d9651a;    --st-delayed-fg: #9a3f08;    --st-delayed-bg: #fde8d6;    --st-delayed-bd: #f3bb8f;
+    --st-scheduled: #6b7b83;  --st-scheduled-fg: #3f5058;  --st-scheduled-bg: #e7edef;  --st-scheduled-bd: #c8d3d8;
+    --st-cancelled: #7b888e;  --st-cancelled-fg: #5a676d;  --st-cancelled-bg: #f0f3f4;  --st-cancelled-bd: #d5dde0;
+  }
+  body.dark-mode {
+    --bg: #081a20;
+    --card: #10252d;
+    --card-2: #0b1d24;
+    --border: #243f4a;
+    --text: #e4eff2;
+    --muted: #93adb6;
+
+    --primary: #2aa3b8;
+    --primary-hover: #4bbccf;
+    --on-primary: #04222a;
+    --primary-soft: #14363f;
+    --link: #6cd0e0;
+    --accent: #a99bff;
+    --accent-soft: #261f4a;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+
+    --st-moving-fg: #7fe3ae;     --st-moving-bg: #11382a;     --st-moving-bd: #1f6a4a;
+    --st-paused-fg: #f1c86e;     --st-paused-bg: #382b0c;     --st-paused-bd: #6a5018;
+    --st-stopped-fg: #ff9fa8;    --st-stopped-bg: #401a1f;    --st-stopped-bd: #7b2b34;
+    --st-arrived-fg: #9fc3ff;    --st-arrived-bg: #14284b;    --st-arrived-bd: #2b4f8c;
+    --st-delayed-fg: #ffb07d;    --st-delayed-bg: #3f2209;    --st-delayed-bd: #7b4313;
+    --st-scheduled-fg: #bccbd1;  --st-scheduled-bg: #1b2d34;  --st-scheduled-bd: #36505a;
+    --st-cancelled-fg: #93a3aa;  --st-cancelled-bg: #162830;  --st-cancelled-bd: #2b414a;
+    color-scheme: dark;
+  }
+
+  /* ── BASE ── */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font); font-size: var(--fs-body); background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+  button, input, select, textarea { font-family: inherit; color: inherit; }
+  .hidden { display: none !important; }
+  .icon { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.15em; flex-shrink: 0; }
+
+  /* one label style: card titles, table headers, form labels, sub-captions */
+  .label, .brand-sub, .sidebar-label, .stat-label, .alerts-label, .report-table th, .form-grid label, .share-box label, .eyebrow {
+    font-size: var(--fs-label); font-weight: 700; letter-spacing: 0.12em; color: var(--muted);
+  }
+  .muted-note { color: var(--muted); font-size: var(--fs-small); text-align: center; padding: var(--pad); }
+
+  /* ── ONE CARD STYLE: same radius, border, padding, shadow ── */
+  .stat-card, .map-box, .detail-panel, .alerts-card, .report-card, .vehicle-card, .modal-card, .login-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+  }
+  .stat-card, .detail-panel, .alerts-card, .report-card, .vehicle-card { padding: var(--pad); }
+
+  /* ── BUTTONS (all share one shape) ── */
+  .theme-btn { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: var(--radius-sm); padding: 6px 12px; cursor: pointer; font-size: var(--fs-small); font-weight: 600; transition: background 0.15s, border-color 0.15s; }
+  .theme-btn:hover { background: var(--primary-soft); border-color: var(--primary); }
+  .theme-btn:disabled { opacity: 0.55; cursor: wait; }
+  .login-button, .add-vehicle-btn { border: none; background: var(--primary); color: var(--on-primary); border-radius: var(--radius-sm); font-weight: 700; cursor: pointer; transition: background 0.15s; }
+  .login-button:hover, .add-vehicle-btn:hover { background: var(--primary-hover); }
+  .login-button:disabled { opacity: 0.6; cursor: wait; }
+  .dismiss-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; background: none; border: none; border-radius: 6px; cursor: pointer; color: var(--muted); font-size: 14px; flex-shrink: 0; }
+  .dismiss-btn:hover { color: var(--text); background: var(--card-2); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ── FIELDS ── */
+  .login-field, .date-input, .share-input, .reason-input {
+    border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--card-2); color: var(--text);
+    font-size: var(--fs-body); padding: 8px 10px;
+  }
+  .login-field:focus, .date-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .login-field::placeholder, .share-input::placeholder, .reason-input::placeholder { color: var(--muted); opacity: 1; }
+  .date-input { cursor: pointer; padding: 6px 10px; }
+
+  /* ── LOGIN ── */
+  .login-screen { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+  .login-card { width: min(400px, calc(100% - 40px)); padding: 28px; box-shadow: 0 18px 50px rgba(16, 40, 47, 0.14); }
+  .login-title { font-size: 22px; font-weight: 800; color: var(--primary); margin-bottom: 6px; }
+  body.dark-mode .login-title { color: var(--text); }
+  .login-subtitle { font-size: var(--fs-body); color: var(--muted); margin-bottom: 22px; }
+  .login-card .login-field { width: 100%; margin-bottom: 12px; padding: 12px 14px; font-size: 14px; }
+  .login-button { width: 100%; padding: 12px 18px; font-size: 14px; }
+  .login-note { margin-top: 14px; font-size: var(--fs-small); color: var(--muted); }
+  .login-error { margin-top: 8px; font-size: var(--fs-body); color: var(--st-stopped-fg); min-height: 18px; }
+  .login-ok { margin-top: 8px; font-size: var(--fs-body); font-weight: 600; color: var(--st-moving-fg); background: var(--st-moving-bg); border: 1px solid var(--st-moving-bd); border-radius: var(--radius-sm); padding: 10px 12px; }
+  .link-btn { border: none; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--accent); cursor: pointer; text-decoration: underline; }
+  .user-chip { display: flex; align-items: center; gap: 6px; font-size: var(--fs-small); font-weight: 600; color: var(--text); }
+  .viewer .admin-only { display: none !important; }
+  .role-tag { text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; padding: 2px 7px; border-radius: 10px; background: var(--card-2); color: var(--muted); border: 1px solid var(--border); }
+
+  /* ── NAVBAR ── */
+  .navbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding: 8px 24px; min-height: 56px; flex: 0 0 auto; background: var(--card); border-bottom: 1px solid var(--border); }   /* never squashed: it grows when it wraps */
+  .nav-center { flex: 1 1 0; min-width: 0; }                      /* empty for now: a menu goes here later */
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-icon { width: 34px; height: 34px; border-radius: var(--radius-sm); background: var(--primary); color: var(--on-primary); display: flex; align-items: center; justify-content: center; font-size: 18px; }
+  .brand-name { font-size: 16px; font-weight: 800; color: var(--text); letter-spacing: 0.04em; }
+  .brand-sub { font-size: var(--fs-label); letter-spacing: 0.16em; }
+  .nav-right { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 12px; }
+  #clock { font-size: var(--fs-body); color: var(--muted); font-variant-numeric: tabular-nums; }
+  .showing-line { font-size: var(--fs-small); color: var(--muted); }
+  .showing-line b { color: var(--text); font-weight: 700; }
+  .report-tools { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px 14px; }
+  @media (max-width: 900px) { .brand-sub { display: none; } }
+  @media (max-width: 640px) { .navbar { padding: 8px 12px; } }
+
+  /* admin menu (header centre), pages, approvals */
+  .navbar { position: relative; }
+  .nav-center { display: flex; justify-content: center; }
+  .admin-menu { display: flex; align-items: center; }
+  .main-menu { display: flex; align-items: center; gap: 4px; }
+  .menu-item { display: inline-flex; align-items: center; border: none; background: none; color: var(--muted); font: inherit; font-size: var(--fs-body); font-weight: 600; padding: 6px 12px; border-radius: var(--radius-sm); cursor: pointer; transition: background 0.15s, color 0.15s; }
+  .menu-item:hover { background: var(--card-2); color: var(--text); }
+  .menu-item.active { background: var(--primary-soft); color: var(--primary); }
+  body.dark-mode .menu-item.active { color: var(--link); }
+  .menu-toggle { display: none; align-items: center; }
+  .count-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px; border-radius: 9px; background: var(--st-stopped); color: #fff; font-size: 11px; font-weight: 700; line-height: 1; }
+  @media (max-width: 760px) {
+    .menu-toggle { display: inline-flex; }
+    .main-menu { display: none; position: absolute; top: 100%; left: 12px; z-index: 60; flex-direction: column; align-items: stretch; min-width: 190px; padding: 6px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(16, 40, 47, 0.16); }
+    .main-menu.open { display: flex; }
+    .menu-item { justify-content: space-between; text-align: left; }
+  }
+  .page { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--gap); display: flex; flex-direction: column; gap: var(--gap); align-items: stretch; }
+  .page-title { font-size: 20px; font-weight: 800; color: var(--text); margin: 4px 0 6px; }
+  .users-table { min-width: 560px; }
+  .search-input { width: 230px; max-width: 100%; padding: 6px 10px; font-size: var(--fs-body); }
+  .badge-idle { background: var(--card-2); color: var(--muted); border-color: var(--border); }
+  .tel-link { color: var(--accent); font-weight: 600; text-decoration: none; white-space: nowrap; }
+  .tel-link:hover { text-decoration: underline; }
+  .form-hint { font-size: var(--fs-small); color: var(--muted); margin-top: 10px; }
+  .users-table td, .users-table th { vertical-align: middle; }
+  .row-actions { white-space: nowrap; }
+  .switch-line { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-small); color: var(--muted); cursor: pointer; user-select: none; }
+  .switch-line input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+  .date-filter { display: inline-flex; align-items: center; gap: 6px; }
+  .btn-small { padding: 4px 10px; font-size: var(--fs-small); }
+  .period-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px 24px; }
+  .period-box label { display: block; margin-bottom: 6px; font-size: var(--fs-small); font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+  .period-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  #reportsCard .users-msg { margin: 12px 0 0; }
+  .users-msg { font-size: var(--fs-body); margin-bottom: 8px; min-height: 0; }
+  .users-msg:not(:empty) { padding: 8px 12px; border-radius: var(--radius-sm); font-weight: 600; background: var(--st-moving-bg); color: var(--st-moving-fg); border: 1px solid var(--st-moving-bd); }
+  .users-msg.error:not(:empty) { background: var(--st-stopped-bg); color: var(--st-stopped-fg); border-color: var(--st-stopped-bd); }
+  .status-chip { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 8px; border-radius: 10px; border: 1px solid; }
+  .status-chip.approved { background: var(--st-moving-bg); color: var(--st-moving-fg); border-color: var(--st-moving-bd); }
+  .status-chip.rejected { background: var(--st-stopped-bg); color: var(--st-stopped-fg); border-color: var(--st-stopped-bd); }
+  .icon-btn { width: 32px; height: 32px; border-radius: 50%; background: var(--primary-soft); color: var(--primary); border: none; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer; }
+  body.dark-mode .icon-btn { color: var(--link); }
+  .icon-btn:hover { background: var(--border); }
+
+  /* ── CONNECTION BAR ── */
+  .conn-pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 14px; border: 1px solid; font-size: var(--fs-small); font-weight: 400; white-space: nowrap; cursor: default; }
+  .conn-pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .conn-pill.connected::before { animation: pulse 1.6s ease-in-out infinite; }
+  .conn-pill.connected    { background: var(--st-moving-bg);  color: var(--st-moving-fg);  border-color: var(--st-moving-bd); }
+  .conn-pill.disconnected { background: var(--st-stopped-bg); color: var(--st-stopped-fg); border-color: var(--st-stopped-bd); }
+  .conn-pill.dbdown,
+  .conn-pill.loading      { background: var(--st-arrived-bg); color: var(--st-arrived-fg); border-color: var(--st-arrived-bd); }
+  .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--st-arrived-bd); border-top-color: var(--st-arrived); border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 6px; }
+
+  .layout { display: flex; flex: 1 1 auto; min-height: 0; }      /* fills what the (possibly wrapped) header leaves */
+
+  /* ── STATUS BADGES ── */
+  .badge { display: inline-block; font-size: var(--fs-label); font-weight: 700; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; border: 1px solid; line-height: 1.5; white-space: nowrap; }
+  .badge-moving    { background: var(--st-moving-bg);    color: var(--st-moving-fg);    border-color: var(--st-moving-bd); }
+  .badge-paused    { background: var(--st-paused-bg);    color: var(--st-paused-fg);    border-color: var(--st-paused-bd); }
+  .badge-stopped   { background: var(--st-stopped-bg);   color: var(--st-stopped-fg);   border-color: var(--st-stopped-bd); }
+  .badge-arrived   { background: var(--st-arrived-bg);   color: var(--st-arrived-fg);   border-color: var(--st-arrived-bd); }
+  .badge-delayed   { background: var(--st-delayed-bg);   color: var(--st-delayed-fg);   border-color: var(--st-delayed-bd); }
+  .badge-scheduled { background: var(--st-scheduled-bg); color: var(--st-scheduled-fg); border-color: var(--st-scheduled-bd); }
+  .badge-cancelled { background: var(--st-cancelled-bg); color: var(--st-cancelled-fg); border-color: var(--st-cancelled-bd); text-decoration: line-through; }
+  .badges { display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: flex-start; }
+
+  /* ── SIDEBAR / FLEET LIST ── */
+  .sidebar { width: 272px; background: var(--bg); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; padding: 0 var(--gap) var(--gap); gap: 0; }
+  .sidebar-label { padding: var(--gap) 2px 8px; }
+  .add-vehicle-btn { display: block; width: 100%; margin: 0 0 var(--gap); padding: 10px 12px; font-size: 13px; }
+  .vehicle-list { display: flex; flex-direction: column; gap: 10px; }
+  .vehicle-card { cursor: pointer; border-left: 4px solid var(--border); transition: background 0.15s, box-shadow 0.15s; }
+  .vehicle-card:hover { background: var(--card-2); }
+  .vehicle-card.active { background: var(--primary-soft); box-shadow: 0 0 0 1px var(--primary); }
+  .vc-top    { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-bottom: 6px; }
+  .vc-name   { font-size: 13px; font-weight: 700; color: var(--text); }
+  .vc-driver { font-size: var(--fs-small); color: var(--muted); margin-bottom: 4px; }
+  .vc-route  { font-size: var(--fs-small); color: var(--text); margin-bottom: 6px; }
+  .fuel-wrap     { display: flex; align-items: center; gap: 8px; }
+  .fuel-bar-bg   { flex: 1; height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .fuel-bar-fill { height: 100%; border-radius: 2px; transition: width 0.5s; }
+  .fuel-label    { font-size: var(--fs-small); font-weight: 600; min-width: 34px; text-align: right; }
+  .vc-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .vc-actions .theme-btn { padding: 4px 10px; }
+  .vc-paxlist { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 2px; }
+  .vc-pax { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 0; font-size: var(--fs-small); color: var(--text); border-bottom: 1px dashed var(--border); }
+  .vc-pax:last-child { border-bottom: none; }
+  .pax-plan { color: var(--muted); font-size: var(--fs-small); }
+  .pax-done { display: inline-flex; align-items: center; gap: 4px; color: var(--st-arrived-fg); font-size: var(--fs-small); font-weight: 600; text-align: right; }
+  .pax-btn { padding: 3px 8px; white-space: nowrap; }
+  .empty-state { padding: var(--pad); text-align: center; color: var(--muted); font-size: var(--fs-body); }
+  .empty-state .empty-title { font-size: 13px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .fleet-summary { margin-top: auto; padding-top: var(--gap); }
+  .fleet-summary .sidebar-label { padding-left: 2px; }
+  .fleet-row { display: flex; justify-content: space-between; font-size: var(--fs-body); padding: 3px 2px; color: var(--muted); }
+  .fleet-row .count { font-weight: 700; }
+  .c-scheduled { color: var(--st-scheduled-fg); } .c-moving { color: var(--st-moving-fg); } .c-paused { color: var(--st-paused-fg); }
+  .c-stopped { color: var(--st-stopped-fg); } .c-arrived { color: var(--st-arrived-fg); } .c-delayed { color: var(--st-delayed-fg); }
+
+  /* ── MAIN ── */
+  .main { flex: 1; overflow-y: auto; padding: var(--gap); display: flex; flex-direction: column; gap: var(--gap); }
+
+  /* ── KPI CARDS: the icon takes the card's accent colour (--c) ── */
+  .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: var(--gap); }
+  .stat-card { --c: var(--primary); }
+  .stat-card.k-road { --c: var(--st-moving); } .stat-card.k-arrived { --c: var(--st-arrived); }
+  .stat-card.k-delayed { --c: var(--st-delayed); } .stat-card.k-ai { --c: var(--accent); }
+  .stat-icon { margin-bottom: 10px; width: 30px; height: 30px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: 16px; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); }
+  .stat-label { margin-bottom: 6px; }
+  .stat-value { font-size: var(--fs-kpi); font-weight: 800; line-height: 1.15; color: var(--text); }
+  .stat-sub   { font-size: var(--fs-small); color: var(--muted); margin-top: 2px; }
+
+  /* ── MAP + DETAIL ── */
+  .map-row { display: grid; grid-template-columns: 1fr 290px; gap: var(--gap); height: 320px; }
+  .map-box { overflow: hidden; }
+  #leafletMap { width: 100%; height: 100%; z-index: 1; font-family: var(--font); }
+  body.dark-mode .leaflet-tile-pane { filter: brightness(0.8) saturate(0.85); }
+  .leaflet-bar a, .leaflet-bar a:hover { background: var(--card); color: var(--text); border-color: var(--border); }
+  .leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--card); color: var(--text); border-radius: var(--radius) !important; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2) !important; }
+  .leaflet-popup-content { margin: var(--pad); }
+  .map-popup { font-family: var(--font); font-size: var(--fs-body); min-width: 170px; }
+  .map-popup .popup-title { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 13px; margin-bottom: 8px; color: var(--text); }
+  .map-popup .popup-row   { display: flex; justify-content: space-between; margin-bottom: 4px; }
+  .map-popup .popup-label { color: var(--muted); margin-right: 8px; }
+  .leaflet-marker-icon.vehicle-icon { transition: transform 0.7s ease-out; }
+
+  .detail-panel { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+  .detail-title { font-size: var(--fs-title); font-weight: 800; color: var(--text); margin: 4px 0; }
+  .detail-row   { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); font-size: var(--fs-body); }
+  .detail-row span:first-child { color: var(--muted); }
+  .detail-row span:last-child  { color: var(--text); font-weight: 600; text-align: right; }
+
+  /* AI prediction box: same soft status colours */
+  .ai-box { border-radius: var(--radius-sm); padding: 10px 12px; border: 1px solid; font-size: var(--fs-body); line-height: 1.6; }
+  .ai-box .eyebrow { display: flex; align-items: center; gap: 6px; color: inherit; margin-bottom: 4px; }
+  .ai-box.low     { background: var(--st-moving-bg);    border-color: var(--st-moving-bd);    color: var(--st-moving-fg); }
+  .ai-box.medium  { background: var(--st-paused-bg);    border-color: var(--st-paused-bd);    color: var(--st-paused-fg); }
+  .ai-box.high    { background: var(--st-stopped-bg);   border-color: var(--st-stopped-bd);   color: var(--st-stopped-fg); }
+  .ai-box.unknown { background: var(--st-scheduled-bg); border-color: var(--st-scheduled-bd); color: var(--st-scheduled-fg); }
+
+  /* ── ALERTS ── */
+  .alerts-label { margin-bottom: 10px; }
+  .alert-item { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; border-radius: var(--radius-sm); padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--border); background: var(--card-2); font-size: var(--fs-body); }
+  .alert-item:last-child { margin-bottom: 0; }
+  .alert-item .alert-msg  { flex: 1; line-height: 1.5; color: inherit; }
+  .alert-item .alert-msg .icon { margin-right: 4px; }
+  .alert-item .alert-time { font-size: var(--fs-small); opacity: 0.85; margin-top: 2px; }
+  .alert-item .dismiss-btn { color: inherit; opacity: 0.7; }
+  .alert-warning { background: var(--st-delayed-bg);   border-color: var(--st-delayed-bd);   color: var(--st-delayed-fg); }
+  .alert-info    { background: var(--st-arrived-bg);   border-color: var(--st-arrived-bd);   color: var(--st-arrived-fg); }
+  .alert-success { background: var(--st-moving-bg);    border-color: var(--st-moving-bd);    color: var(--st-moving-fg); }
+  .alert-neutral { background: var(--st-scheduled-bg); border-color: var(--st-scheduled-bd); color: var(--st-scheduled-fg); }
+
+  /* ── END OF DAY REPORT ── */
+  .report-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; }
+  .report-head .alerts-label { margin-bottom: 0; }
+  .head-actions, .row-actions { display: flex; gap: 6px; align-items: center; }
+  .head-actions .theme-btn, .row-actions .theme-btn { white-space: nowrap; }
+  .report-msg { font-size: var(--fs-body); margin-bottom: 8px; color: var(--muted); }
+  .report-msg.error { color: var(--st-stopped-fg); font-weight: 600; }
+  .report-scroll { overflow-x: auto; }
+  .report-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); min-width: 880px; }
+  .report-table th { text-align: left; padding: 8px; border-bottom: 2px solid var(--border); }
+  .report-table td { padding: 9px 8px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text); }
+  .report-table tbody tr:hover td { background: var(--card-2); }
+  .report-table .share-row:hover td { background: transparent; }
+  .report-table .cell-sub { font-size: var(--fs-small); color: var(--muted); }
+  .report-table .delay-cell { color: var(--st-delayed-fg); font-weight: 700; }
+  .report-table .pax-cell { min-width: 205px; }
+  .report-table .pax-cell div { padding: 1px 0; }
+  .report-empty { text-align: center; color: var(--muted); padding: 22px 10px !important; }
+  .reason-wrap { display: flex; gap: 6px; align-items: center; min-width: 165px; }
+  .reason-input { flex: 1; min-width: 0; }
+  .reason-wrap .theme-btn { padding: 5px 10px; }
+  .pdf-btn:disabled { cursor: wait; }
+
+  /* share boxes */
+  .share-row td { padding: 0 !important; border-bottom: none !important; }
+  .share-box { padding: var(--pad); margin: 2px 0 var(--gap); border: 1px dashed var(--border); border-radius: var(--radius); background: var(--card-2); }
+  .share-box label { display: block; margin-bottom: 6px; }
+  .share-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .share-input { flex: 1 1 260px; max-width: 420px; }
+  .share-line .theme-btn { padding: 6px 14px; }
+  .share-cancel { font-size: var(--fs-body); color: var(--link); text-decoration: underline; cursor: pointer; }
+  .share-msg { font-size: var(--fs-body); font-weight: 600; margin-top: 6px; min-height: 16px; }
+  .share-msg.ok { color: var(--st-moving-fg); }
+  .share-msg.error { color: var(--st-stopped-fg); }
+
+  /* ── MODALS: add vehicle, drop off ── */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(8, 26, 32, 0.6); display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 32px 16px; z-index: 2000; }
+  .modal-card { width: min(720px, 100%); padding: 22px 24px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.3); }
+  .modal-card.modal-sm { width: min(420px, 100%); }
+  .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .modal-title { font-size: 17px; font-weight: 800; color: var(--text); }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+  .form-grid.single { grid-template-columns: 1fr; }
+  .form-grid label { display: block; margin-bottom: 4px; letter-spacing: 0.08em; }
+  .form-grid .login-field, .pax-row .login-field { width: 100%; padding: 9px 11px; font-size: 13px; }
+  .form-wide { grid-column: 1 / -1; }
+  .duration-line { font-size: var(--fs-body); font-weight: 700; color: var(--st-arrived-fg); }
+  .duration-line.bad { color: var(--st-stopped-fg); }
+  .pax-head { display: flex; justify-content: space-between; align-items: center; margin: 18px 0 8px; font-size: var(--fs-body); font-weight: 700; color: var(--text); }
+  .pax-head .count-note { font-weight: 400; color: var(--muted); }
+  .pax-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 8px; margin-bottom: 8px; align-items: center; }
+  .form-error { color: var(--st-stopped-fg); font-size: var(--fs-body); margin-top: 12px; white-space: pre-line; min-height: 18px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+  .modal-actions .login-button { width: auto; padding: 9px 22px; font-size: 13px; }
+  .modal-actions .theme-btn { padding: 9px 18px; font-size: 13px; }
+  @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } .pax-row { grid-template-columns: 1fr 1fr; } }
+
+  /* fleet dropdown (searchable) and locked fields */
+  .combo { position: relative; }
+  .combo .login-field { width: 100%; }
+  .combo-list { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; max-height: 240px; overflow-y: auto; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2); padding: 4px; }
+  .combo-item { padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: var(--fs-body); color: var(--text); }
+  .combo-item:hover, .combo-item.active { background: var(--primary-soft); }
+  .combo-new { color: var(--link); font-weight: 700; border-top: 1px solid var(--border); margin-top: 4px; border-radius: 0 0 6px 6px; }
+  .combo-empty { padding: 8px 10px; color: var(--muted); font-size: var(--fs-body); }
+  .login-field[readonly], .login-field:disabled { background: var(--card-2); color: var(--muted); cursor: default; }
+  .login-field:disabled { cursor: not-allowed; }
+  .login-field[readonly]:focus { border-color: var(--border); box-shadow: none; }
+  .form-error.ok { color: var(--st-moving-fg); font-weight: 600; }
+  .sidebar-actions { display: flex; gap: 8px; margin-bottom: var(--gap); }
+  .sidebar-actions .add-vehicle-btn { width: auto; flex: 1 1 auto; margin: 0; }
+  .sidebar-actions .theme-btn { flex: 0 0 auto; white-space: nowrap; padding: 6px 10px; }
+
+  /* edit / cancel / delete */
+  .theme-btn.danger { color: var(--st-stopped-fg); border-color: var(--st-stopped-bd); }
+  .theme-btn.danger:hover { background: var(--st-stopped-bg); border-color: var(--st-stopped); }
+  .login-button.danger { background: var(--st-stopped); }
+  .login-button.danger:hover { filter: brightness(0.9); background: var(--st-stopped); }
+  .action-msg { font-size: var(--fs-small); font-weight: 600; color: var(--st-stopped-fg); background: var(--st-stopped-bg); border: 1px solid var(--st-stopped-bd); border-radius: var(--radius-sm); padding: 6px 10px; margin: 0 0 var(--gap); white-space: pre-line; }
+  .confirm-text { font-size: 13px; line-height: 1.55; color: var(--text); }
+  .pax-row .theme-btn { white-space: nowrap; padding: 6px 10px; }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  @keyframes spin  { to{transform:rotate(360deg)} }
+  .drop-who { font-size: 13px; margin-bottom: 14px; }
+  .popup-actions, .detail-actions { margin-top: 8px; }
+  .popup-actions { text-align: right; }
+  .fuel-eyebrow { margin-bottom: 6px; }
+  .ai-note { margin-top: 4px; opacity: 0.85; }
+  .ai-small { font-size: var(--fs-small); opacity: 0.75; }
+</style>
+</head>
+<body>
+<!-- ICONS: one inline SVG sprite (24x24 line icons). Use: <svg class="icon"><use href="#i-name"/></svg>. They take the text colour. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-bus" viewBox="0 0 24 24"><path d="M8 6v6"/><path d="M15 6v6"/><path d="M2 12h19.6"/><path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3"/><circle cx="7" cy="18" r="2"/><path d="M9 18h5"/><circle cx="16" cy="18" r="2"/></symbol>
+  <symbol id="i-car" viewBox="0 0 24 24"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><path d="M9 17h6"/><circle cx="17" cy="17" r="2"/></symbol>
+  <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></symbol>
+  <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/></symbol>
+  <symbol id="i-triangle-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+  <symbol id="i-radio" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></symbol>
+</svg>
+
+<!-- LOGIN -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <form id="loginForm" onsubmit="submitLogin(event)" novalidate>
+      <div class="login-title"><span class="company-name">Fleet</span> Login</div>
+      <div class="login-subtitle">Sign in to access the fleet tracking dashboard.</div>
+      <input id="loginEmail" class="login-field" type="email" placeholder="Email" autocomplete="username" maxlength="120"/>
+      <input id="loginPass" class="login-field" type="password" placeholder="Password" autocomplete="current-password" maxlength="128"/>
+      <button class="login-button" type="submit" id="loginBtn">Sign In</button>
+      <div class="login-error" id="loginError"></div>
+      <div class="login-note">No account yet? <button type="button" class="link-btn" onclick="showAuthView('register')">Create account</button></div>
+    </form>
+    <form id="signupForm" class="hidden" onsubmit="submitSignup(event)" novalidate>
+      <div class="login-title">Create account</div>
+      <div class="login-subtitle">An admin must approve your account before you can sign in.</div>
+      <div id="regFields">
+        <input id="regName" class="login-field" type="text" placeholder="Full name" autocomplete="name" maxlength="100"/>
+        <input id="regEmail" class="login-field" type="email" placeholder="Email" autocomplete="email" maxlength="120"/>
+        <input id="regPass" class="login-field" type="password" placeholder="Password (at least 8 characters)" autocomplete="new-password" maxlength="128"/>
+        <input id="regPass2" class="login-field" type="password" placeholder="Confirm password" autocomplete="new-password" maxlength="128"/>
+        <button class="login-button" type="submit" id="regBtn">Register</button>
+      </div>
+      <div class="login-error" id="regError"></div>
+      <div class="login-ok hidden" id="regOk"></div>
+      <div class="login-note"><button type="button" class="link-btn" onclick="showAuthView('login')">Back to sign in</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- NAV -->
+<nav class="navbar">
+  <div class="brand">
+    <div class="brand-icon"><svg class="icon" aria-hidden="true"><use href="#i-radio"/></svg></div>
+    <div>
+      <div class="brand-name company-name">Fleet</div>
+      <div class="brand-sub">GPS VEHICLE TRACKING · ANAMBRA STATE</div>
+    </div>
+  </div>
+  <div class="nav-center" id="navCenter">
+    <div class="admin-menu hidden" id="adminMenu">
+      <button type="button" class="theme-btn menu-toggle" id="menuToggle" onclick="toggleMenu()" aria-expanded="false" aria-controls="mainMenu">Menu<span class="count-badge hidden" id="menuBadge"></span></button>
+      <div class="main-menu" id="mainMenu" role="navigation" aria-label="Main menu">
+        <button type="button" class="menu-item active" data-page="dashboard" onclick="showPage('dashboard')">Dashboard</button>
+        <button type="button" class="menu-item" data-page="drivers" onclick="showPage('drivers')">Drivers</button>
+        <button type="button" class="menu-item" data-page="vehicles" onclick="showPage('vehicles')">Vehicles</button>
+        <button type="button" class="menu-item" data-page="settings" onclick="showPage('settings')">Settings<span class="count-badge hidden" id="pendingBadge"></span></button>
+      </div>
+    </div>
+  </div>
+  <div class="nav-right">
+    <div class="conn-pill loading" id="connBar" title="Start the server with: python app.py">CONNECTING</div>
+    <button id="themeToggle" class="icon-btn" onclick="toggleTheme()" title="Switch to dark mode" aria-label="Switch to dark mode"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg></button>
+    <div id="clock">00:00:00</div>
+    <div class="user-chip hidden" id="userChip"><span id="userName"></span><span class="role-tag hidden" id="userRole"></span></div>
+    <button class="theme-btn" id="logoutBtn" onclick="logout()">Logout</button>
+  </div>
+</nav>
+
+<!-- LAYOUT -->
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-label" id="fleetLabel">FLEET · 0 VEHICLES</div>
+    <div class="sidebar-actions admin-only">
+      <button class="add-vehicle-btn" id="addVehicleBtn" onclick="openAddForm()">+ Add Trip</button>
+      <button class="theme-btn" id="registerVehicleBtn" onclick="openRegisterForm()">Register Vehicle</button>
+    </div>
+    <div class="action-msg hidden" id="actionMsg" role="alert"></div>
+    <div class="vehicle-list" id="vehicleList"></div>
+    <div class="fleet-summary">
+      <div class="sidebar-label">FLEET SUMMARY</div>
+      <div class="fleet-row"><span>Scheduled</span><span class="count c-scheduled" id="sum_scheduled">0</span></div>
+      <div class="fleet-row"><span>Moving</span>   <span class="count c-moving" id="sum_moving">0</span></div>
+      <div class="fleet-row"><span>Paused</span>   <span class="count c-paused" id="sum_paused">0</span></div>
+      <div class="fleet-row"><span>Stopped</span>  <span class="count c-stopped" id="sum_stopped">0</span></div>
+      <div class="fleet-row"><span>Arrived</span>  <span class="count c-arrived" id="sum_arrived">0</span></div>
+      <div class="fleet-row"><span>Delayed</span>  <span class="count c-delayed" id="sum_delayed">0</span></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="showing-line" id="showingLine">Showing: <b></b></div>
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-icon"><svg class="icon" aria-hidden="true"><use href="#i-bus"/></svg></div><div class="stat-label">VEHICLES TODAY</div><div class="stat-value" id="kVehicles">—</div><div class="stat-sub">with a trip</div></div>
+      <div class="stat-card k-road"><div class="stat-icon"><svg class="icon" aria-hidden="true"><use href="#i-route"/></svg></div><div class="stat-label">ON THE ROAD</div><div class="stat-value" id="kRoad">—</div><div class="stat-sub">moving · paused · stopped</div></div>
+      <div class="stat-card k-arrived"><div class="stat-icon"><svg class="icon" aria-hidden="true"><use href="#i-check-circle"/></svg></div><div class="stat-label">ARRIVED</div><div class="stat-value" id="kArrived">—</div><div class="stat-sub">trips completed</div></div>
+      <div class="stat-card k-delayed"><div class="stat-icon"><svg class="icon" aria-hidden="true"><use href="#i-clock"/></svg></div><div class="stat-label">DELAYED</div><div class="stat-value" id="kDelayed">—</div><div class="stat-sub">late now or arrived late</div></div>
+      <div class="stat-card"><div class="stat-icon"><svg class="icon" aria-hidden="true"><use href="#i-gauge"/></svg></div><div class="stat-label">ON-TIME RATE</div><div class="stat-value" id="kOnTime">—</div><div class="stat-sub">of arrived trips</div></div>
+      <div class="stat-card"><div class="stat-icon"><svg class="icon" aria-hidden="true"><use href="#i-users"/></svg></div><div class="stat-label">PASSENGERS</div><div class="stat-value" id="kPax">—</div><div class="stat-sub">dropped off / booked</div></div>
+      <div class="stat-card k-ai"><div class="stat-icon"><svg class="icon" aria-hidden="true"><use href="#i-sparkles"/></svg></div><div class="stat-label">AI ALERTS</div><div class="stat-value" id="alertCount">0</div><div class="stat-sub">pending</div></div>
+    </div>
+
+    <div class="map-row">
+      <div class="map-box"><div id="leafletMap"></div></div>
+      <div class="detail-panel" id="detailPanel">
+        <div class="muted-note">Select a vehicle</div>
+      </div>
+    </div>
+
+    <div class="alerts-card">
+      <div class="alerts-label"> AI PREDICTION ALERTS</div>
+      <div id="alertsList"></div>
+    </div>
+
+    <div class="report-card">
+      <div class="report-head">
+        <div class="alerts-label">END OF DAY REPORT · <span id="reportDate"></span></div>
+        <div class="report-tools">
+          <input type="date" id="datePicker" class="date-input" title="Report date: show trips for this date" aria-label="Report date" onchange="onDateChange(this.value)"/>
+          <div class="head-actions">
+            <button class="theme-btn pdf-btn" id="pdfAllBtn" onclick="downloadDayPdf()">Download all (PDF)</button>
+            <button class="theme-btn admin-only" id="shareAllBtn" onclick="openShareAll()">Share all (PDF)</button>
+          </div>
+        </div>
+      </div>
+      <div class="share-box hidden" id="shareAllBox"></div>
+      <div class="report-msg" id="reportMsg"></div>
+      <div class="report-scroll">
+        <table class="report-table">
+          <thead><tr>
+            <th>DRIVER</th><th>VEHICLE</th><th>ROUTE</th><th>SCHEDULED ARRIVAL</th><th>ACTUAL ARRIVAL</th>
+            <th>STATUS</th><th>DELAY (MIN)</th><th>DELAY REASON</th><th>PASSENGERS</th><th>PDF</th>
+          </tr></thead>
+          <tbody id="reportBody"><tr><td colspan="10" class="report-empty">No trips for this date</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- OTHER PAGES (admin menu). The dashboard above is only hidden, never rebuilt: the map and the polling keep running. -->
+<section class="page hidden" id="page-drivers">
+  <div class="report-card">
+    <div class="report-head">
+      <div class="alerts-label">DRIVERS <span class="count-note" id="drvCount"></span></div>
+      <div class="report-tools">
+        <label class="switch-line" title="List removed drivers (they can be restored)"><input type="checkbox" id="drvShowRemoved" onchange="loadAdminDrivers()"/> Show removed</label>
+        <input type="search" id="drvSearch" class="login-field search-input" placeholder="Search name or phone" oninput="renderAdminDrivers()" aria-label="Search drivers" autocomplete="off"/>
+        <span class="date-filter">
+          <input type="date" id="drvDate" class="date-input" title="Count the trips completed on this date" aria-label="Trips completed on date" onchange="loadAdminDrivers()"/>
+          <button type="button" class="theme-btn btn-small" id="drvAllBtn" onclick="clearDriverDate()">All dates</button>
+        </span>
+        <button class="theme-btn" onclick="openDriverForm(null)">Add Driver</button>
+      </div>
+    </div>
+    <div class="users-msg" id="drvMsg" role="status"></div>
+    <div class="report-scroll">
+      <table class="report-table users-table">
+        <thead><tr><th>DRIVER NAME</th><th>PHONE</th><th id="drvCompletedTh">TRIPS COMPLETED</th><th>LAST TRIP</th><th>STATUS</th><th></th></tr></thead>
+        <tbody id="driversBody"><tr><td colspan="6" class="report-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+<section class="page hidden" id="page-vehicles">
+  <div class="report-card">
+    <div class="report-head">
+      <div class="alerts-label">VEHICLES <span class="count-note" id="vehCount"></span></div>
+      <div class="report-tools">
+        <label class="switch-line" title="List removed vehicles (they can be restored)"><input type="checkbox" id="vehShowRemoved" onchange="loadAdminVehicles()"/> Show removed</label>
+        <input type="search" id="vehSearch" class="login-field search-input" placeholder="Search name or plate" oninput="renderAdminVehicles()" aria-label="Search vehicles" autocomplete="off"/>
+        <button class="theme-btn" onclick="openRegisterForm()">Register Vehicle</button>
+      </div>
+    </div>
+    <div class="users-msg" id="vehMsg" role="status"></div>
+    <div class="report-scroll">
+      <table class="report-table users-table">
+        <thead><tr><th>VEHICLE NAME</th><th>PLATE NUMBER</th><th>SEATS</th><th>STATUS</th><th></th></tr></thead>
+        <tbody id="vehiclesBody"><tr><td colspan="5" class="report-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+<section class="page hidden" id="page-settings">
+  <div class="report-card" id="reportsCard">
+    <div class="report-head"><div class="alerts-label">REPORTS</div></div>
+    <div class="period-grid">
+      <div class="period-box">
+        <label for="repMonth">MONTHLY REPORT</label>
+        <div class="period-line">
+          <input type="month" id="repMonth" class="date-input" min="2000-01" max="2100-12" aria-label="Month and year"/>
+          <button class="theme-btn pdf-btn" type="button" id="repMonthBtn" onclick="downloadPeriod('month')">Download monthly report (PDF)</button>
+        </div>
+      </div>
+      <div class="period-box">
+        <label for="repYear">YEARLY REPORT</label>
+        <div class="period-line">
+          <select id="repYear" class="date-input" aria-label="Year"></select>
+          <button class="theme-btn pdf-btn" type="button" id="repYearBtn" onclick="downloadPeriod('year')">Download yearly report (PDF)</button>
+        </div>
+      </div>
+    </div>
+    <div class="users-msg" id="repMsg" role="status"></div>
+  </div>
+  <div class="report-card">
+    <div class="report-head"><div class="alerts-label">PENDING APPROVALS <span class="count-note" id="pendingCount"></span></div></div>
+    <div class="users-msg" id="usersMsg" role="status"></div>
+    <div class="report-scroll">
+      <table class="report-table users-table">
+        <thead><tr><th>NAME</th><th>EMAIL</th><th>REGISTERED</th><th></th></tr></thead>
+        <tbody id="pendingBody"><tr><td colspan="4" class="report-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="report-card">
+    <div class="report-head"><div class="alerts-label">MEMBERS</div></div>
+    <div class="report-scroll">
+      <table class="report-table users-table">
+        <thead><tr><th>NAME</th><th>EMAIL</th><th>ROLE</th><th>STATUS</th><th></th></tr></thead>
+        <tbody id="membersBody"><tr><td colspan="5" class="report-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ADD VEHICLE / TRIP FORM -->
+<div class="modal-overlay hidden" id="addModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-title">Add Trip</div>
+      <button class="dismiss-btn" type="button" onclick="closeAddForm()" title="Close" aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+    </div>
+    <form id="addForm" onsubmit="submitAddForm(event)" novalidate>
+      <div class="form-grid">
+        <div>
+          <label for="fFleetSearch">VEHICLE NAME</label>
+          <div class="combo" id="fleetCombo">
+            <input id="fFleetSearch" class="login-field" type="text" role="combobox" aria-expanded="false" aria-controls="fleetList"
+                   aria-autocomplete="list" autocomplete="off" placeholder="Search by vehicle name…"/>
+            <div class="combo-list hidden" id="fleetList" role="listbox"></div>
+          </div>
+        </div>
+        <div>
+          <label for="fPlate">PLATE NUMBER</label>
+          <input id="fPlate" class="login-field" maxlength="15" placeholder="Choose a vehicle name first" autocomplete="off" disabled/>
+          <select id="fPlateSelect" class="login-field hidden" onchange="onPlateSelect()" aria-label="Plate number"></select>
+        </div>
+        <div class="form-wide hidden" id="newNameWrap"><label for="fModel">VEHICLE NAME (NEW VEHICLE)</label><input id="fModel" class="login-field" maxlength="100" placeholder="e.g. Toyota Sienna" autocomplete="off"/></div>
+        <div><label for="fSeats">NUMBER OF SEATS (EXCLUDING DRIVER)</label><input id="fSeats" class="login-field" type="number" min="1" max="60" step="1" placeholder="Filled in when you choose the plate" oninput="refreshPassengers()" readonly/></div>
+        <div><label for="fDriver">DRIVER</label><select id="fDriver" class="login-field"><option value="">Choose a driver…</option></select></div>
+        <div><label for="fOrigin">POINT A (FROM)</label><select id="fOrigin" class="login-field"></select></div>
+        <div><label for="fDest">POINT B (TO)</label><select id="fDest" class="login-field" onchange="onDestChange()"></select></div>
+        <div><label for="fDep">DEPARTURE TIME</label><input id="fDep" class="login-field" type="datetime-local" oninput="updateDuration()"/></div>
+        <div><label for="fArr">EXPECTED ARRIVAL TIME</label><input id="fArr" class="login-field" type="datetime-local" oninput="updateDuration()"/></div>
+        <div class="form-wide duration-line" id="durationLine">Estimated duration: —</div>
+      </div>
+
+      <div class="pax-head"><span>PASSENGERS <span class="count-note" id="paxCount"></span></span><button type="button" class="theme-btn" onclick="addPassengerRow()">+ Add passenger</button></div>
+      <div id="paxRows"></div>
+
+      <div class="form-error" id="formError"></div>
+      <div class="modal-actions">
+        <button type="button" class="theme-btn" onclick="closeAddForm()">Cancel</button>
+        <button type="submit" class="login-button" id="submitBtn">Create Trip</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- DROP OFF A PASSENGER -->
+<div class="modal-overlay hidden" id="dropModal">
+  <div class="modal-card modal-sm">
+    <div class="modal-head">
+      <div class="modal-title">Drop off passenger</div>
+      <button class="dismiss-btn" type="button" onclick="closeDropForm()" title="Close" aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+    </div>
+    <div id="dropWho" class="drop-who"></div>
+    <div class="form-grid single">
+      <div><label for="dropSelect">DROP-OFF LOCATION</label><select id="dropSelect" class="login-field"></select></div>
+    </div>
+    <div class="form-error" id="dropError"></div>
+    <div class="modal-actions">
+      <button type="button" class="theme-btn" onclick="closeDropForm()">Cancel</button>
+      <button type="button" class="login-button" id="dropBtn" onclick="submitDrop()">Confirm drop-off</button>
+    </div>
+  </div>
+</div>
+
+<!-- ADD / EDIT A DRIVER (admin: Drivers page) -->
+<div class="modal-overlay hidden" id="drvModal">
+  <div class="modal-card modal-sm">
+    <div class="modal-head">
+      <div class="modal-title" id="dmTitle">Add Driver</div>
+      <button class="dismiss-btn" type="button" onclick="closeDriverForm()" title="Close" aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+    </div>
+    <form id="drvForm" onsubmit="submitDriverForm(event)" novalidate>
+      <div class="form-grid single">
+        <div><label for="dName">DRIVER'S NAME</label><input id="dName" class="login-field" maxlength="100" placeholder="Full name" autocomplete="off"/></div>
+        <div><label for="dPhone">PHONE (OPTIONAL)</label><input id="dPhone" class="login-field" type="tel" maxlength="20" placeholder="e.g. +234 803 123 4567" autocomplete="off"/></div>
+        <div id="dStatusWrap" class="hidden"><label for="dStatus">STATUS</label>
+          <select id="dStatus" class="login-field"><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
+      </div>
+      <div class="form-hint" id="dHint"></div>
+      <div class="form-error" id="dError"></div>
+      <div class="modal-actions">
+        <button type="button" class="theme-btn" onclick="closeDriverForm()">Close</button>
+        <button type="submit" class="login-button" id="dSave">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- EDIT A VEHICLE (admin: Vehicles page) -->
+<div class="modal-overlay hidden" id="vehEditModal">
+  <div class="modal-card modal-sm">
+    <div class="modal-head">
+      <div class="modal-title" id="veTitle">Edit Vehicle</div>
+      <button class="dismiss-btn" type="button" onclick="closeVehEdit()" title="Close" aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+    </div>
+    <form id="vehEditForm" onsubmit="submitVehEdit(event)" novalidate>
+      <div class="form-grid single">
+        <div><label for="veName">VEHICLE NAME</label><input id="veName" class="login-field" maxlength="100" autocomplete="off"/></div>
+        <div><label for="vePlate">PLATE NUMBER</label><input id="vePlate" class="login-field" maxlength="15" autocomplete="off"/></div>
+        <div><label for="veSeats">NUMBER OF SEATS (EXCLUDING DRIVER)</label><input id="veSeats" class="login-field" type="number" min="1" max="60" step="1"/></div>
+      </div>
+      <div class="form-hint" id="veHint"></div>
+      <div class="form-error" id="veError"></div>
+      <div class="modal-actions">
+        <button type="button" class="theme-btn" onclick="closeVehEdit()">Close</button>
+        <button type="submit" class="login-button" id="veSave">Save changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- REGISTER A VEHICLE (adds it to the fleet; no trip is created) -->
+<div class="modal-overlay hidden" id="registerModal">
+  <div class="modal-card modal-sm">
+    <div class="modal-head">
+      <div class="modal-title">Register Vehicle</div>
+      <button class="dismiss-btn" type="button" onclick="closeRegisterForm()" title="Close" aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+    </div>
+    <form id="registerForm" onsubmit="submitRegister(event)" novalidate>
+      <div class="form-grid single">
+        <div><label for="rPlate">PLATE NUMBER</label><input id="rPlate" class="login-field" maxlength="15" placeholder="e.g. AWK-234-XA" autocomplete="off"/></div>
+        <div><label for="rModel">VEHICLE NAME</label><input id="rModel" class="login-field" maxlength="100" placeholder="e.g. Toyota Sienna" autocomplete="off"/></div>
+        <div><label for="rSeats">NUMBER OF SEATS (EXCLUDING DRIVER)</label><input id="rSeats" class="login-field" type="number" min="1" max="60" step="1" placeholder="e.g. 7"/></div>
+      </div>
+      <div class="form-error" id="rMsg"></div>
+      <div class="modal-actions">
+        <button type="button" class="theme-btn" onclick="closeRegisterForm()">Close</button>
+        <button type="submit" class="login-button" id="registerBtn">Register Vehicle</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- EDIT A SCHEDULED TRIP -->
+<div class="modal-overlay hidden" id="editModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-title" id="editTitle">Edit Trip</div>
+      <button class="dismiss-btn" type="button" onclick="closeEditTrip()" title="Close" aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+    </div>
+    <form id="editForm" onsubmit="submitEdit(event)" novalidate>
+      <div class="form-grid">
+        <div><label for="eVehicle">VEHICLE</label><input id="eVehicle" class="login-field" readonly/></div>
+        <div><label for="eOrigin">POINT A (FROM)</label><input id="eOrigin" class="login-field" readonly/></div>
+        <div><label for="eDest">POINT B (TO)</label><select id="eDest" class="login-field"></select></div>
+        <div><label for="eDriver">DRIVER</label><input id="eDriver" class="login-field" readonly/></div>
+        <div><label for="eDep">DEPARTURE TIME</label><input id="eDep" class="login-field" type="datetime-local" oninput="updateEditDuration()"/></div>
+        <div><label for="eArr">EXPECTED ARRIVAL TIME</label><input id="eArr" class="login-field" type="datetime-local" oninput="updateEditDuration()"/></div>
+        <div class="form-wide duration-line" id="eDuration">Estimated duration: —</div>
+      </div>
+
+      <div class="pax-head"><span>PASSENGERS <span class="count-note" id="ePaxCount"></span></span><button type="button" class="theme-btn" onclick="editAddPassengerRow()">+ Add passenger</button></div>
+      <div id="ePaxRows"></div>
+
+      <div class="form-error" id="editError"></div>
+      <div class="modal-actions">
+        <button type="button" class="theme-btn" onclick="closeEditTrip()">Close</button>
+        <button type="submit" class="login-button" id="editSaveBtn">Save changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- CONFIRM: cancel / delete / arrive (no browser popups) -->
+<div class="modal-overlay hidden" id="confirmModal">
+  <div class="modal-card modal-sm">
+    <div class="modal-head">
+      <div class="modal-title" id="confirmTitle">Are you sure?</div>
+      <button class="dismiss-btn" type="button" onclick="closeConfirm()" title="Close" aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="confirm-text" id="confirmText"></div>
+    <div class="form-error" id="confirmError"></div>
+    <div class="modal-actions">
+      <button type="button" class="theme-btn" id="confirmNo" onclick="closeConfirm()">Go back</button>
+      <button type="button" class="login-button danger" id="confirmYes" onclick="runConfirm()">Yes</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = location.port === '5000' ? location.origin : 'http://localhost:5000';   // served by Flask: same origin as the login cookie
+const REFRESH_MS = 10000;          // the whole dashboard (map, cards, KPIs, alerts, report) refreshes together
+
+/* Status labels. The colours live in ONE place - the CSS variables --st-<key> (and the .badge-<key> classes) - and
+   solid() reads them, so cards, map markers and the report table can't drift apart. */
+const STATUS = {
+  moving:    { label:'MOVING' },
+  paused:    { label:'PAUSED' },
+  stopped:   { label:'STOPPED' },
+  arrived:   { label:'ARRIVED' },
+  delayed:   { label:'LATE' },
+  scheduled: { label:'SCHEDULED' },
+  cancelled: { label:'CANCELLED' },
+};
+function solid(key) { return getComputedStyle(document.body).getPropertyValue('--st-' + key).trim() || '#7b888e'; }
+/* line icon from the sprite at the top of the page */
+function ico(name, extra = '') { return `<svg class="icon ${extra}" aria-hidden="true"><use href="#i-${name}"/></svg>`; }
+const ON_THE_ROAD = ['moving', 'paused', 'stopped'];
+// buttons shown on a trip card, by trip status: [api action, label]
+const TRIP_ACTIONS = {
+  scheduled: [['start','Start'], ['edit','Edit'], ['cancel','Cancel']],
+  moving:    [['pause','Pause'], ['stop','Stop'], ['arrive','Arrive']],
+  paused:    [['resume','Resume'], ['stop','Stop'], ['arrive','Arrive']],
+  stopped:   [['resume','Resume'], ['arrive','Arrive']],
+  arrived:   [],
+  cancelled: [],
+};
+
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+const $ = id => document.getElementById(id);
+
+let selectedDate      = todayStr();
+let trips             = [];     // every trip on selectedDate, any status (from /api/trips/report)
+let vehicles          = [];     // vehicles on the road on selectedDate (moving / paused / stopped)
+let summary           = {};     // report.summary: trip counts by status for selectedDate
+let kpis              = null;   // /api/kpis for selectedDate
+let aiByVehicle       = {};     // vehicle id -> /api/ai/predict result, for vehicles on the road only
+let selectedTripId    = null;
+let dismissedAlerts   = [];
+let flaskOnline       = false;
+let leafletMap        = null;
+let tileLayer         = null;
+let leafletMarkers    = {};
+let fetchToken        = 0;
+let dashboardStarted  = false;
+let dropCtx           = null;   // {tripId, passengerId} while the drop-off dialog is open
+let appConfig         = { company_name:'Fleet', map_center:{ lat:6.188, lng:6.927, zoom:10 }, towns:{} };  // overwritten by /api/config
+
+/* CLOCK */
+setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('en-GB'); }, 1000);
+$('datePicker').value = selectedDate;
+
+/* THEME */
+const preferredTheme = localStorage.getItem('gpsDashboardTheme') || 'light';
+applyTheme(preferredTheme);
+
+function applyTheme(theme) {
+  const isDark = theme === 'dark';
+  document.body.classList.toggle('dark-mode', isDark);
+  const btn = $('themeToggle');
+  if (btn) {                                   // a small icon button: the moon offers dark mode, the sun goes back to light
+    btn.innerHTML = ico(isDark ? 'sun' : 'moon');
+    btn.title = btn.ariaLabel = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+  }
+  localStorage.setItem('gpsDashboardTheme', theme);
+  if (leafletMap) { addTiles(isDark); renderMarkers(); }
+}
+function toggleTheme() { applyTheme(document.body.classList.contains('dark-mode') ? 'light' : 'dark'); }
+
+/* LOGIN: real accounts stored in MySQL (auth.py). The login lives in a session cookie, so every request carries it. */
+const _fetch = window.fetch.bind(window);
+window.fetch = async (url, opts = {}) => {
+  const r = await _fetch(url, { credentials: 'include', ...opts });
+  if (r.status === 401 && currentUser && !String(url).includes('/api/auth/')) signedOut();   // session ended: back to the login screen
+  return r;
+};
+let currentUser = null;
+const isViewer = () => !!currentUser && currentUser.role !== 'admin';   // the server enforces this too; the page only hides what a viewer can't use
+function applyRole() {
+  document.body.classList.toggle('viewer', isViewer());
+}
+function signedOut() {
+  currentUser = null;
+  $('userChip').classList.add('hidden');
+  $('adminMenu').classList.add('hidden'); showPage('dashboard'); clearAdminData();
+  applyRole();
+  showLoginScreen('Please sign in again');
+}
+
+function showAuthView(view) {
+  $('loginForm').classList.toggle('hidden', view !== 'login');
+  $('signupForm').classList.toggle('hidden', view !== 'register');
+  $('loginError').textContent = ''; $('regError').textContent = '';
+  if (view === 'register') {                 // a fresh, empty form every time
+    $('signupForm').reset();
+    $('regFields').classList.remove('hidden'); $('regOk').classList.add('hidden');
+    $('regName').focus();
+  } else $('loginEmail').focus();
+}
+function showLoginScreen(message) {
+  $('loginScreen').classList.remove('hidden');
+  showAuthView('login');
+  $('loginError').textContent = message || '';
+}
+function hideLoginScreen() { $('loginScreen').classList.add('hidden'); }
+
+/* ADMIN MENU + PAGES: pages are only shown/hidden, so the map is never rebuilt and the polling never restarts */
+const isAdmin = () => !!currentUser && currentUser.role === 'admin';
+const PAGES = ['drivers', 'vehicles', 'settings'];
+let currentPage = 'dashboard';
+function showPage(name) {
+  if (name !== 'dashboard' && (!isAdmin() || !PAGES.includes(name))) name = 'dashboard';
+  currentPage = name;
+  document.querySelector('.layout').classList.toggle('hidden', name !== 'dashboard');
+  PAGES.forEach(p => $('page-' + p).classList.toggle('hidden', p !== name));
+  document.querySelectorAll('.menu-item').forEach(b => b.classList.toggle('active', b.dataset.page === name));
+  closeMenu();
+  if (name === 'dashboard' && leafletMap) setTimeout(() => leafletMap.invalidateSize(), 50);   // the map was hidden: re-measure it
+  if (name === 'settings') { loadUsers(true); loadReportYears(); }
+  if (name === 'vehicles') loadAdminVehicles();
+  if (name === 'drivers') loadAdminDrivers();
+}
+function toggleMenu() { const open = $('mainMenu').classList.toggle('open'); $('menuToggle').setAttribute('aria-expanded', open); }
+function closeMenu() { $('mainMenu').classList.remove('open'); $('menuToggle').setAttribute('aria-expanded', 'false'); }
+document.addEventListener('click', e => { if (!e.target.closest('#adminMenu')) closeMenu(); });
+
+/* VEHICLES + DRIVERS PAGES (admin only; the server refuses everyone else with 403) */
+let adminVehicles = [], adminDrivers = [], vehMsgTimer = null, vehEditId = null;
+function phoneProblem(v) {                   // optional: digits, spaces, dashes and a leading +; 7 to 15 digits
+  v = (v || '').trim();
+  if (!v) return '';
+  if (!/^[0-9+\-\s]+$/.test(v) || v.indexOf('+') > 0) return 'Phone number: digits, spaces, dashes and a leading + only.';
+  const digits = (v.match(/\d/g) || []).length;
+  return digits < 7 || digits > 15 ? 'Phone number must have 7 to 15 digits, e.g. +234 803 123 4567.' : '';
+}
+const telLink = p => p ? `<a class="tel-link" href="tel:${esc(p.replace(/[^\d+]/g, ''))}">${esc(p)}</a>` : '<span class="cell-sub">—</span>';
+const statusBadge = st => `<span class="badge badge-${esc(st)}">${esc(st.toUpperCase())}</span>`;
+const matches = (q, ...fields) => !q || fields.some(f => (f || '').toLowerCase().includes(q));
+function showVehMsg(text, isError) {
+  const el = $('vehMsg');
+  el.textContent = text; el.classList.toggle('error', !!isError);
+  clearTimeout(vehMsgTimer);
+  if (text) vehMsgTimer = setTimeout(() => { el.textContent = ''; }, 6000);
+}
+let vehLoadSeq = 0, vehShown = 'active';
+async function loadAdminVehicles() {
+  if (!isAdmin()) return;
+  const removed = $('vehShowRemoved').checked, seq = ++vehLoadSeq;
+  try {
+    const r = await fetch(`${API}/api/admin/vehicles${removed ? '?removed=1' : ''}`);
+    if (!r.ok) { if (r.status !== 401) showVehMsg((await r.json().catch(() => ({}))).error || 'Could not load the vehicles', true); return; }
+    const rows = await r.json();
+    if (seq !== vehLoadSeq) return;                    // the switch was flipped again meanwhile
+    adminVehicles = rows; vehShown = removed ? 'removed' : 'active'; renderAdminVehicles();
+  } catch(e) { /* offline: the status pill already says so */ }
+}
+let drvLoadSeq = 0, drvMsgTimer = null, drvEditId = null, drvDateShown = '', drvShown = 'active';
+async function loadAdminDrivers() {
+  if (!isAdmin()) return;
+  const day = $('drvDate').value, removed = $('drvShowRemoved').checked, seq = ++drvLoadSeq;   // a slow answer for an old date must not overwrite a newer one
+  const query = [day ? 'date=' + encodeURIComponent(day) : '', removed ? 'removed=1' : ''].filter(Boolean).join('&');
+  try {
+    const r = await fetch(`${API}/api/admin/drivers${query ? '?' + query : ''}`);
+    if (!r.ok || seq !== drvLoadSeq) return;
+    adminDrivers = await r.json(); drvDateShown = day; drvShown = removed ? 'removed' : 'active'; renderAdminDrivers();
+  } catch(e) { /* offline */ }
+}
+function clearDriverDate() { $('drvDate').value = ''; loadAdminDrivers(); }
+function showDrvMsg(text, isError) {
+  const el = $('drvMsg'); el.textContent = text; el.classList.toggle('error', !!isError);
+  clearTimeout(drvMsgTimer);
+  if (text) drvMsgTimer = setTimeout(() => { el.textContent = ''; }, 7000);
+}
+function renderAdminVehicles() {
+  const q = $('vehSearch').value.trim().toLowerCase();
+  const rows = adminVehicles.filter(v => matches(q, v.name, v.plate_number));
+  $('vehCount').textContent = adminVehicles.length ? `· ${rows.length}${q ? ' of ' + adminVehicles.length : ''}` : '';
+  $('vehiclesBody').innerHTML = rows.length ? rows.map(v => `<tr>
+      <td><b>${esc(v.name)}</b></td><td>${esc(v.plate_number)}</td><td>${esc(v.seats)}</td>
+      <td>${vehShown === 'removed' ? `<span class="badge badge-idle" title="Removed ${esc(v.removed_at)}">REMOVED</span>` : statusBadge(v.status)}</td>
+      <td class="row-actions">${vehShown === 'removed'
+        ? `<button class="theme-btn" onclick="restoreItem('vehicle', ${v.id})">Restore</button>`
+        : `<button class="theme-btn" onclick="openVehEdit(${v.id})">Edit</button> <button class="theme-btn danger" onclick="askRemove('vehicle', ${v.id})">Remove</button>`}</td></tr>`).join('')
+    : `<tr><td colspan="5" class="report-empty">${adminVehicles.length ? 'No vehicle matches your search' : vehShown === 'removed' ? 'No removed vehicles' : 'No vehicles registered yet'}</td></tr>`;
+}
+function renderAdminDrivers() {
+  const q = $('drvSearch').value.trim().toLowerCase();
+  const rows = adminDrivers.filter(d => matches(q, d.name, d.phone, (d.phone || '').replace(/[\s-]/g, '')));       // a phone is found with or without its spaces and dashes
+  $('drvCount').textContent = adminDrivers.length ? `· ${rows.length}${q ? ' of ' + adminDrivers.length : ''}` : '';
+  $('drvCompletedTh').textContent = drvDateShown ? `TRIPS COMPLETED ON ${drvDateShown}` : 'TRIPS COMPLETED';
+  $('driversBody').innerHTML = rows.length ? rows.map(d => `<tr>
+      <td><b>${esc(d.name)}</b></td><td>${telLink(d.phone)}</td>
+      <td>${esc(d.trips_completed)}</td><td>${d.last_trip ? esc(d.last_trip) : '<span class="cell-sub">—</span>'}</td>
+      <td>${drvShown === 'removed' ? `<span class="badge badge-idle" title="Removed ${esc(d.removed_at)}">REMOVED</span>`
+            : `<span class="badge ${d.status === 'active' ? 'badge-moving' : 'badge-idle'}">${d.status === 'active' ? 'ACTIVE' : 'INACTIVE'}</span>`}</td>
+      <td class="row-actions">${drvShown === 'removed'
+        ? `<button class="theme-btn" onclick="restoreItem('driver', ${d.id})">Restore</button>`
+        : `<button class="theme-btn" onclick="openDriverForm(${d.id})">Edit</button> <button class="theme-btn danger" onclick="askRemove('driver', ${d.id})">Remove</button>`}</td></tr>`).join('')
+    : `<tr><td colspan="6" class="report-empty">${adminDrivers.length ? 'No driver matches your search' : drvShown === 'removed' ? 'No removed drivers' : 'No drivers yet. Press Add Driver.'}</td></tr>`;
+}
+function openDriverForm(id) {                  // id null = add
+  const d = id === null ? null : adminDrivers.find(x => x.id === id);
+  if (id !== null && !d) return;
+  drvEditId = id;
+  $('dmTitle').textContent = d ? `Edit ${d.name}` : 'Add Driver';
+  $('dName').value = d ? d.name : ''; $('dPhone').value = d ? (d.phone || '') : '';
+  $('dStatus').value = d ? d.status : 'active';
+  $('dStatusWrap').classList.toggle('hidden', !d);
+  $('dHint').textContent = d ? 'A driver can be made inactive only when they have no scheduled, moving or paused trip. Inactive drivers are not offered when you add a trip.' : '';
+  $('dError').textContent = '';
+  $('dSave').textContent = d ? 'Save changes' : 'Add Driver';
+  $('drvModal').classList.remove('hidden');
+  $('dName').focus();
+}
+function closeDriverForm() { $('drvModal').classList.add('hidden'); drvEditId = null; }
+async function submitDriverForm(e) {
+  e.preventDefault();
+  const out = $('dError'), name = $('dName').value.trim(), phone = $('dPhone').value.trim();
+  const errors = [];
+  if (!name) errors.push("Driver's name is required.");
+  const phoneErr = phoneProblem(phone); if (phoneErr) errors.push(phoneErr);
+  if (errors.length) { out.textContent = errors.join('\n'); return; }
+  out.textContent = '';
+  const editing = drvEditId !== null, btn = $('dSave'), label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await fetch(`${API}/api/admin/drivers${editing ? '/' + drvEditId : ''}`, { method: editing ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name: name, phone, ...(editing ? { status: $('dStatus').value } : {}) }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { out.textContent = serverMessage(d, 'Could not save the driver'); if (editing) loadAdminDrivers(); return; }   // the reason stays inside the modal
+    closeDriverForm();
+    showDrvMsg(editing ? `${d.name} saved.` : `${d.name} added.`, false);
+    await loadAdminDrivers();
+    fetchAll();
+  } catch(err) {
+    out.textContent = 'Could not reach the server — is it running (python app.py)?';
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+function openVehEdit(id) {
+  const v = adminVehicles.find(x => x.id === id);
+  if (!v) return;
+  vehEditId = id;
+  $('veTitle').textContent = `Edit ${v.name} (${v.plate_number})`;
+  $('veName').value = v.name; $('vePlate').value = v.plate_number; $('veSeats').value = v.seats;
+  $('veHint').textContent = v.locked ? `This vehicle has a ${v.status === 'idle' ? 'scheduled' : v.status} trip, so its name, plate number and seats can't be changed for now.` : '';
+  $('veError').textContent = '';
+  $('vehEditModal').classList.remove('hidden');
+  $('veName').focus();
+}
+function closeVehEdit() { $('vehEditModal').classList.add('hidden'); vehEditId = null; }
+async function submitVehEdit(e) {
+  e.preventDefault();
+  if (vehEditId === null) return;
+  const out = $('veError'), seats = Number($('veSeats').value);
+  const errors = [];
+  if (!$('veName').value.trim()) errors.push('Vehicle name is required.');
+  if (!$('vePlate').value.trim()) errors.push('Plate number is required.');
+  else if (!PLATE_RE.test($('vePlate').value.trim())) errors.push('Plate number must be 3 to 15 characters: letters, digits and hyphens only.');
+  if (!Number.isInteger(seats) || seats < 1 || seats > 60) errors.push('Number of seats must be a whole number from 1 to 60.');
+  if (errors.length) { out.textContent = errors.join('\n'); return; }
+  out.textContent = '';
+  const btn = $('veSave'); btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await fetch(`${API}/api/admin/vehicles/${vehEditId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_name: $('veName').value.trim(), plate_number: $('vePlate').value.trim(), seat_count: seats }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { out.textContent = serverMessage(d, 'Could not save the changes'); loadAdminVehicles(); return; }      // the server's reason stays inside the modal
+    closeVehEdit();
+    showVehMsg(`${d.name} (${d.plate_number}) saved.`, false);
+    await loadAdminVehicles();
+    fetchAll();                                     // the dashboard cards and map follow
+  } catch(err) {
+    out.textContent = 'Could not reach the server — is it running (python app.py)?';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save changes';
+  }
+}
+
+/* REPORTS (Settings, admin only): monthly and yearly PDFs. A period with no trips shows a message instead of a file. */
+let repBusy = false, repMsgTimer = null;
+function showRepMsg(text, isError) {
+  const el = $('repMsg');
+  el.textContent = text; el.classList.toggle('error', !!isError);
+  clearTimeout(repMsgTimer);
+  if (text && !isError) repMsgTimer = setTimeout(() => { el.textContent = ''; }, 6000);
+}
+async function loadReportYears() {
+  const now = new Date(), thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  if (!$('repMonth').value) $('repMonth').value = thisMonth;
+  try {
+    const r = await fetch(`${API}/api/admin/reports/years`);
+    if (!r.ok) return;
+    const d = await r.json();
+    const sel = $('repYear'), keep = sel.value;
+    sel.innerHTML = d.years.map(y => `<option value="${y}">${y}</option>`).join('');
+    sel.value = d.years.map(String).includes(keep) ? keep : String(now.getFullYear());
+  } catch (e) { /* the buttons still work with whatever is in the list */ }
+}
+async function downloadPeriod(kind) {
+  if (repBusy) return;
+  const value = kind === 'month' ? $('repMonth').value : $('repYear').value;
+  if (!value) { showRepMsg(kind === 'month' ? 'Choose a month first.' : 'Choose a year first.', true); return; }
+  repBusy = true; $('repMonthBtn').disabled = $('repYearBtn').disabled = true;
+  showRepMsg('Preparing the PDF…', false);
+  try {
+    const r = await fetch(`${API}/api/admin/reports/${kind === 'month' ? 'monthly' : 'yearly'}.pdf?${kind}=${encodeURIComponent(value)}`);
+    if (!r.ok) {
+      let why = `the server answered ${r.status}`;
+      try { const d = await r.json(); if (d.error) why = d.error; } catch (e) {}
+      showRepMsg(why, true);                           // e.g. "No trips found for April 2026" (no file is downloaded)
+      return;
+    }
+    const blob = await r.blob();
+    const m = /filename="?([^";]+)"?/.exec(r.headers.get('Content-Disposition') || '');
+    const name = m ? m[1] : (kind === 'month' ? `Monthly_Report_${value}.pdf` : `Yearly_Report_${value}.pdf`);
+    const url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    showRepMsg(`Downloaded ${name}`, false);
+  } catch (e) {
+    showRepMsg(e instanceof TypeError ? 'Could not reach the server — is it running (python app.py)?' : e.message, true);
+  } finally {
+    repBusy = false; $('repMonthBtn').disabled = $('repYearBtn').disabled = false;
+  }
+}
+
+let usersData = { pending: [], approved: [], rejected: [] }, usersSig = '', usersMsgTimer = null;
+function clearAdminData() {                  // nothing admin-only (phones, sign-ups) may stay in memory or in the page for the next person to sign in
+  adminVehicles = []; adminDrivers = []; usersData = { pending: [], approved: [], rejected: [] }; usersSig = '';
+  $('vehiclesBody').innerHTML = '<tr><td colspan="5" class="report-empty">Loading…</td></tr>';
+  $('driversBody').innerHTML = '<tr><td colspan="6" class="report-empty">Loading…</td></tr>';
+  $('pendingBody').innerHTML = '<tr><td colspan="4" class="report-empty">Loading…</td></tr>';
+  $('membersBody').innerHTML = '<tr><td colspan="5" class="report-empty">Loading…</td></tr>';
+  ['vehSearch', 'drvSearch', 'drvDate'].forEach(id => { $(id).value = ''; });
+  ['vehShowRemoved', 'drvShowRemoved'].forEach(id => { $(id).checked = false; }); vehShown = drvShown = 'active';
+  drvDateShown = ''; $('drvCompletedTh').textContent = 'TRIPS COMPLETED';
+  ['vehMsg', 'usersMsg', 'repMsg', 'drvMsg'].forEach(id => { $(id).textContent = ''; });
+  ['vehCount', 'drvCount'].forEach(id => { $(id).textContent = ''; });
+  updatePendingBadge();
+  $('fDriver').innerHTML = '<option value="">Choose a driver…</option>';          // the Add Trip driver list carries phone numbers too
+  $('drvForm').reset();
+  closeVehEdit(); closeDriverForm();
+}
+function showUsersMsg(text, isError) {
+  const el = $('usersMsg');
+  el.textContent = text; el.classList.toggle('error', !!isError);
+  clearTimeout(usersMsgTimer);
+  if (text) usersMsgTimer = setTimeout(() => { el.textContent = ''; }, 7000);
+}
+function updatePendingBadge() {
+  const n = usersData.pending.length;
+  ['pendingBadge', 'menuBadge'].forEach(id => { $(id).textContent = n; $(id).classList.toggle('hidden', !n); });
+  $('pendingCount').textContent = n ? `· ${n}` : '';
+}
+async function loadUsers(force = false) {          // refreshes the lists and the red badge on the Settings menu item
+  if (!isAdmin()) return;
+  try {
+    const r = await fetch(`${API}/api/admin/users`);
+    if (!r.ok) { if (r.status !== 401) showUsersMsg((await r.json().catch(() => ({}))).error || 'Could not load the users', true); return; }
+    const d = await r.json(), sig = JSON.stringify(d);
+    usersData = d; updatePendingBadge();
+    if (force || sig !== usersSig) { usersSig = sig; renderUsers(); }      // don't redraw an unchanged list every 10 seconds
+  } catch(e) { /* offline: the status pill already says so */ }
+}
+const userDate = v => (v || '').slice(0, 16).replace('T', ' ') || '—';
+function renderUsers() {
+  $('pendingBody').innerHTML = usersData.pending.length
+    ? usersData.pending.map(u => `<tr>
+        <td><b>${esc(u.full_name)}</b></td><td>${esc(u.email)}</td><td>${esc(userDate(u.created_at))}</td>
+        <td><div class="row-actions"><button class="theme-btn" onclick="approveUser(${u.id})">Approve</button>
+        <button class="theme-btn danger" onclick="askUserConfirm('reject', ${u.id})">Reject</button></div></td></tr>`).join('')
+    : '<tr><td colspan="4" class="report-empty">No pending requests</td></tr>';
+  const members = [...usersData.approved, ...usersData.rejected];
+  $('membersBody').innerHTML = members.length ? members.map(u => {
+    const action = u.role === 'admin' ? '<span class="cell-sub">Admin</span>'
+      : u.status === 'approved' ? `<button class="theme-btn danger" onclick="askUserConfirm('reject', ${u.id})">Revoke access</button>`
+      : `<button class="theme-btn" onclick="approveUser(${u.id})">Re-approve</button>`;
+    return `<tr><td><b>${esc(u.full_name)}</b></td><td>${esc(u.email)}</td><td>${esc(u.role)}</td>
+      <td><span class="status-chip ${esc(u.status)}">${esc(u.status)}</span></td><td>${action}</td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="report-empty">No members yet</td></tr>';
+}
+async function userAction(id, action) {            // returns '' on success, otherwise the server's reason
+  try {
+    const r = await fetch(`${API}/api/admin/users/${id}/${action}`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { loadUsers(true); return d.error || `The server answered ${r.status}`; }
+    const who = `${d.user.full_name}`;
+    showUsersMsg(action === 'approve' ? `${who} approved. They can sign in now.`
+                 : d.previous_status === 'approved' ? `${who}'s access was revoked.` : `${who}'s sign-up was rejected.`, false);
+  } catch(e) { return 'Could not reach the server — is it running (python app.py)?'; }
+  await loadUsers(true);
+  return '';
+}
+async function approveUser(id) { const err = await userAction(id, 'approve'); if (err) showUsersMsg(err, true); }
+function askRemove(kind, id) {                        // Remove button on the Drivers / Vehicles pages: the confirmation modal, no alert()
+  const item = (kind === 'driver' ? adminDrivers : adminVehicles).find(x => x.id === id);
+  if (!item) return;
+  confirmCtx = { kind: 'remove-' + kind, id };
+  $('confirmTitle').textContent = kind === 'driver' ? 'Remove this driver?' : 'Remove this vehicle?';
+  $('confirmText').textContent = `Remove ${item.name}${kind === 'vehicle' ? ' (' + item.plate_number + ')' : ''}? If it has past trips it is kept for old reports; otherwise it is deleted permanently.`;
+  $('confirmError').textContent = '';
+  const yes = $('confirmYes');
+  yes.textContent = 'Yes, remove'; yes.classList.add('danger'); yes.disabled = false;
+  $('confirmModal').classList.remove('hidden');
+  $('confirmNo').focus();
+}
+async function afterRemoveOrRestore(kind, message) {
+  (kind === 'driver' ? showDrvMsg : showVehMsg)(message, false);
+  await Promise.all([loadAdminDrivers(), loadAdminVehicles()]);
+  fetchAll();                                          // cards, map and the Add Trip lists follow
+}
+async function restoreItem(kind, id) {
+  const base = `${API}/api/admin/${kind === 'driver' ? 'drivers' : 'vehicles'}/${id}/restore`;
+  try {
+    const r = await fetch(base, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { (kind === 'driver' ? showDrvMsg : showVehMsg)(d.error || `The server answered ${r.status}`, true); return; }
+    await afterRemoveOrRestore(kind, d.message);
+  } catch(e) { (kind === 'driver' ? showDrvMsg : showVehMsg)('Could not reach the server — is it running (python app.py)?', true); }
+}
+function askUserConfirm(action, id) {               // action 'reject' (also used to revoke access): the confirmation modal, no alert()
+  const u = [...usersData.pending, ...usersData.approved, ...usersData.rejected].find(x => x.id === id);
+  if (!u) return;
+  const revoke = u.status === 'approved';
+  confirmCtx = { kind: 'user-' + action, id };
+  $('confirmTitle').textContent = revoke ? 'Revoke access?' : 'Reject this sign-up?';
+  $('confirmText').textContent = revoke
+    ? `${u.full_name} (${u.email}) will lose access straight away: their next request is refused and they can no longer sign in.`
+    : `${u.full_name} (${u.email}) will not be able to sign in.`;
+  $('confirmError').textContent = '';
+  const yes = $('confirmYes');
+  yes.textContent = revoke ? 'Yes, revoke access' : 'Yes, reject'; yes.classList.add('danger'); yes.disabled = false;
+  $('confirmModal').classList.remove('hidden');
+  $('confirmNo').focus();
+}
+
+function enterDashboard(user) {
+  clearAdminData();
+  currentUser = user;
+  $('userName').textContent = user.name;
+  $('userRole').textContent = user.role;                       // visible only for an admin; currentUser.role is what the checks use
+  $('userRole').classList.toggle('hidden', user.role !== 'admin');
+  $('userChip').title = user.email;
+  $('userChip').classList.remove('hidden');
+  applyRole();
+  $('adminMenu').classList.toggle('hidden', !isAdmin());          // the menu is for admins only
+  showPage('dashboard');
+  usersSig = ''; if (isAdmin()) loadUsers(true);
+  renderAll();                               // a viewer must not briefly see admin controls from an earlier render
+  hideLoginScreen();
+  startDashboard();
+}
+
+async function initAuth() {                  // page load: are we already logged in?
+  try {
+    const r = await fetch(`${API}/api/auth/me`);
+    if (r.ok) { enterDashboard(await r.json()); return; }
+    const d = await r.json().catch(() => ({}));
+    showLoginScreen(r.status === 503 ? d.error : '');
+  } catch(e) {
+    showLoginScreen('Cannot reach the server. Start it with: python app.py');
+  }
+}
+
+async function submitLogin(ev) {
+  ev.preventDefault();
+  const email = $('loginEmail').value.trim(), password = $('loginPass').value, out = $('loginError');
+  out.textContent = '';
+  if (!email || !password) { out.textContent = 'Please enter your email and password.'; return; }
+  const btn = $('loginBtn');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { out.textContent = d.error || `The server answered ${r.status}`; $('loginPass').value = ''; return; }
+    $('loginPass').value = '';
+    enterDashboard(d);
+  } catch(e) {
+    out.textContent = 'Cannot reach the server. Start it with: python app.py';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function submitSignup(ev) {
+  ev.preventDefault();
+  const name = $('regName').value.trim(), email = $('regEmail').value.trim(), p1 = $('regPass').value, p2 = $('regPass2').value, out = $('regError');
+  out.textContent = '';
+  if (!name) { out.textContent = 'Enter your full name.'; return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { out.textContent = 'Enter a valid email address.'; return; }
+  if (p1.length < 8) { out.textContent = 'Password must be at least 8 characters.'; return; }
+  if (p1 !== p2) { out.textContent = 'The two passwords do not match.'; return; }
+  const btn = $('regBtn');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/api/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ full_name: name, email, password: p1 }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { out.textContent = d.error || `The server answered ${r.status}`; return; }
+    $('signupForm').reset();
+    $('regFields').classList.add('hidden');
+    $('regOk').textContent = 'Registration received. You can log in once the admin approves your account.';
+    $('regOk').classList.remove('hidden');
+  } catch(e) {
+    out.textContent = 'Cannot reach the server. Start it with: python app.py';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function logout() {
+  try { await fetch(`${API}/api/auth/logout`, { method: 'POST' }); } catch(e) {}
+  currentUser = null;
+  $('userChip').classList.add('hidden');
+  $('adminMenu').classList.add('hidden'); showPage('dashboard'); clearAdminData();
+  applyRole();
+  showLoginScreen();
+}
+
+/* APP CONFIG (company name, map centre, towns) */
+function applyCompanyName() {
+  document.title = `${appConfig.company_name} Dashboard`;
+  document.querySelectorAll('.company-name').forEach(el => { el.textContent = appConfig.company_name; });
+}
+async function loadConfig() {
+  try {
+    appConfig = await fetch(`${API}/api/config`, { signal: AbortSignal.timeout(3000) }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+  } catch(e) { console.warn('Could not load /api/config, using defaults:', e); }
+  applyCompanyName();
+}
+applyCompanyName();                          // /api/config needs a login: it is loaded by startDashboard() after sign-in
+(async () => {                               // the company name is public: the login screen shows it before anyone signs in
+  try {
+    const r = await fetch(`${API}/api/public/info`);
+    if (r.ok) { const d = await r.json(); if (d.company) { appConfig.company_name = d.company; applyCompanyName(); } }
+  } catch(e) {}
+})();
+
+/* CONNECTION PILL (header): the long message is kept as the tooltip */
+function setConn(state, msg) {
+  const pill = $('connBar');
+  pill.className = 'conn-pill ' + state;
+  pill.textContent = { connected: 'LIVE', disconnected: 'OFFLINE', dbdown: 'DATABASE OFFLINE' }[state] || 'CONNECTING';
+  pill.title = state === 'disconnected' ? 'Start the server with: python app.py'
+             : state === 'dbdown' ? 'Start MySQL (XAMPP), then refresh' : (msg || '');
+}
+
+/* ── LEAFLET MAP ── */
+function initMap() {
+  const c = appConfig.map_center;
+  leafletMap = L.map('leafletMap', { center:[c.lat, c.lng], zoom:c.zoom });
+  addTiles(document.body.classList.contains('dark-mode'));
+  renderMarkers();
+}
+
+function addTiles(isDark) {
+  if (tileLayer) leafletMap.removeLayer(tileLayer);
+  const url = isDark
+    ? 'https://tile.openstreetmap.de/{z}/{x}/{y}.png'
+    : 'https://tile.openstreetmap.de/{z}/{x}/{y}.png';
+  tileLayer = L.tileLayer(url, { attribution:'© OpenStreetMap contributors', maxZoom:18 });
+  tileLayer.addTo(leafletMap);
+}
+
+function makeVehicleIcon(color, isSel) {
+  const size = isSel ? 44 : 36;
+  return L.divIcon({
+    html: `<div style="width:${size}px;height:${size}px;background:${color};border:${isSel?3:2}px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:${isSel?22:17}px;color:#fff;box-shadow:0 2px 10px rgba(0,0,0,0.3);cursor:pointer;">${ico('car')}</div>`,
+    className:'vehicle-icon', iconSize:[size,size], iconAnchor:[size/2,size/2]
+  });
+}
+
+/* A trip's colour: orange when it is running late, otherwise its own status colour. */
+function colorKey(status, delayed) { return delayed && ON_THE_ROAD.includes(status) ? 'delayed' : status; }
+
+/* Markers = vehicles on the road only; a vehicle with no moving/paused/stopped trip has no marker */
+function renderMarkers() {
+  if (!leafletMap) return;
+  const onRoad = new Set(vehicles.map(v => v.id));
+  Object.keys(leafletMarkers).forEach(id => {
+    if (!onRoad.has(Number(id))) { leafletMap.removeLayer(leafletMarkers[id]); delete leafletMarkers[id]; }
+  });
+
+  vehicles.forEach(v => {
+    const key   = colorKey(v.trip_status, v.delayed);
+    const color = solid(key);
+    const isSel = v.trip_id === selectedTripId;
+    const fc    = v.fuel > 60 ? 'moving' : v.fuel > 30 ? 'paused' : 'stopped';
+    const late  = v.delayed ? ` · late ${v.late_minutes} min` : '';
+    const popup = `<div class="map-popup">
+      <div class="popup-title">${ico('car')} ${esc(v.name)}</div>
+      <div class="popup-row"><span class="popup-label">Driver</span><span>${esc(v.driver)}</span></div>
+      <div class="popup-row"><span class="popup-label">Status</span><span style="color:var(--st-${key}-fg);font-weight:700;">${esc(v.trip_status.toUpperCase())}${esc(late)}</span></div>
+      <div class="popup-row"><span class="popup-label">Speed</span><span>${v.speed} km/h</span></div>
+      <div class="popup-row"><span class="popup-label">Fuel</span><span style="color:var(--st-${fc}-fg);font-weight:600;">${v.fuel}%</span></div>
+      <div class="popup-row"><span class="popup-label">Route</span><span>${esc(v.route)}</span></div>
+      <div class="popup-row"><span class="popup-label">ETA</span><span>${esc(v.eta)}</span></div>
+      ${isViewer() ? '' : `<div class="popup-actions"><button class="theme-btn" onclick="refuelVehicle(${v.id})">Refuel</button></div>`}
+    </div>`;
+
+    if (leafletMarkers[v.id]) {
+      leafletMarkers[v.id].setLatLng([v.latitude, v.longitude]);
+      leafletMarkers[v.id].setIcon(makeVehicleIcon(color, isSel));
+      leafletMarkers[v.id].setPopupContent(popup);
+    } else {
+      leafletMarkers[v.id] = L.marker([v.latitude, v.longitude], { icon: makeVehicleIcon(color, isSel) })
+        .addTo(leafletMap)
+        .bindPopup(popup, { maxWidth:220 })
+        .on('click', () => { const cur = vehicles.find(x => x.id === v.id); if (cur) selectTrip(cur.trip_id); });
+    }
+  });
+}
+
+/* ── DATA ── */
+async function getJSON(url) {
+  const r = await fetch(url);
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || r.status);
+  return d;
+}
+
+async function fetchAll() {
+  const token = ++fetchToken;               // ignore a slow response if the date changed meanwhile
+  const q = `date=${encodeURIComponent(selectedDate)}`;
+  try {
+    const [rep, veh, k] = await Promise.all([
+      getJSON(`${API}/api/trips/report?${q}`), getJSON(`${API}/api/vehicles?${q}`), getJSON(`${API}/api/kpis?${q}`)
+    ]);
+    // real AI prediction for every vehicle that is on the road
+    const ai = {};
+    await Promise.all(veh.map(async v => {
+      try { ai[v.id] = await getJSON(`${API}/api/ai/predict/${v.id}`); } catch(e) {}
+    }));
+    if (token !== fetchToken) return;
+    trips = rep.trips; summary = rep.summary; vehicles = veh; kpis = k; aiByVehicle = ai; flaskOnline = true;
+    if (!trips.some(x => x.id === selectedTripId)) selectedTripId = trips.length ? trips[0].id : null;
+  } catch(e) {
+    if (token !== fetchToken) return;
+    flaskOnline = false; trips = []; vehicles = []; summary = {}; kpis = null; aiByVehicle = {};
+  }
+  renderAll();
+  if (isAdmin()) loadUsers();                // also keeps the red badge on Settings current
+}
+
+/* HEALTH CHECK: the pill is driven by /api/health every few seconds (fetchAll above no longer touches it) */
+const HEALTH_MS = 3000;
+let lastHealth = '';
+async function checkHealth() {
+  let state = 'disconnected';                               // request failed / timed out: Flask is not running
+  try {
+    const r = await fetch(`${API}/api/health`, { signal: AbortSignal.timeout(3500), cache: 'no-store' });
+    if (r.ok) { const d = await r.json(); state = d.database === 'ok' ? 'connected' : 'dbdown'; }
+  } catch(e) {}
+  setConn(state);
+  if (state === 'connected' && lastHealth && lastHealth !== 'connected') fetchAll();   // came back: reload the data now
+  lastHealth = state;
+}
+
+function renderShowing() {                   // "Showing: 4 Nov 2026" above the KPI cards
+  const [y, m, d] = selectedDate.split('-').map(Number);
+  $('showingLine').querySelector('b').textContent = new Date(y, m - 1, d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+function renderAll() { renderShowing(); renderSidebar(); renderStats(); renderMarkers(); renderDetail(); renderAlerts(); renderReport(); }
+
+function onDateChange(value) {
+  selectedDate = value || todayStr();
+  Object.keys(share).forEach(k => delete share[k]);
+  shareAll = null; renderShareAll();
+  $('datePicker').value = selectedDate;
+  renderShowing();
+  selectedTripId = null;
+  fetchAll();
+}
+
+/* ── RENDERING ── */
+function renderStats() {
+  const k = kpis;
+  $('kVehicles').textContent = k ? k.vehicles_used : '—';
+  $('kRoad').textContent     = k ? k.vehicles_on_the_road : '—';
+  $('kArrived').textContent  = k ? k.trips_by_status.arrived : '—';
+  $('kDelayed').textContent  = k ? k.delayed_trips : '—';
+  $('kOnTime').textContent   = k && k.on_time_rate_pct != null ? `${k.on_time_rate_pct}%` : '—';   // no arrived trips yet
+  $('kPax').textContent      = k ? `${k.passengers_alighted} / ${k.passengers_booked}` : '—';
+  ['scheduled','moving','paused','stopped','arrived','delayed'].forEach(s => { $('sum_' + s).textContent = summary[s] || 0; });
+}
+
+function fuelBar(value) {
+  value = Math.round(value * 10) / 10;
+  const k = value>60 ? 'moving' : value>30 ? 'paused' : 'stopped';
+  return `<div class="fuel-wrap"><div class="fuel-bar-bg"><div class="fuel-bar-fill" style="width:${value}%;background:var(--st-${k});"></div></div><span class="fuel-label" style="color:var(--st-${k}-fg);">${value}%</span></div>`;
+}
+
+function fmtDuration(mins) {
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return (h ? `${h} h ` : '') + (m || !h ? `${m} min` : '');
+}
+/* 'YYYY-MM-DD HH:MM:SS' -> 'HH:MM' (with the date in front when it isn't the selected day) */
+function fmtTime(s) {
+  if (!s) return '—';
+  return (s.slice(0, 10) === selectedDate ? '' : s.slice(5, 10) + ' ') + s.slice(11, 16);
+}
+
+function paxLabel(t) {
+  if (t.status === 'scheduled' || t.status === 'cancelled') return `${t.passengers_total} booked`;
+  return `${t.passengers_onboard}/${t.passengers_total} on board`;
+}
+
+/* status badge, plus an orange LATE chip when the trip is late now or arrived late */
+function badgesFor(t) {
+  const main = `<span class="badge badge-${t.status}">${STATUS[t.status].label}</span>`;
+  const late = t.delayed ? `<span class="badge badge-delayed">LATE ${t.late_minutes}m</span>` : '';
+  return main + late;
+}
+
+function renderSidebar() {
+  $('fleetLabel').textContent = `FLEET · ${summary.vehicles_total || 0} VEHICLES`;
+  const list = $('vehicleList');
+  if (!flaskOnline) {
+    list.innerHTML = `<div class="empty-state"><div class="empty-title">Server offline</div>Start the backend with <b>python app.py</b>.</div>`;
+    return;
+  }
+  if (!trips.length) {
+    const when = selectedDate === todayStr() ? 'today' : `on ${selectedDate}`;
+    list.innerHTML = `<div class="empty-state"><div class="empty-title">No vehicles on the road ${esc(when)}</div>Add a trip to put a vehicle on the road.</div>`;
+    return;
+  }
+  list.innerHTML = trips.map(t => {
+    const veh = vehicles.find(v => v.trip_id === t.id);
+    const canDrop = ON_THE_ROAD.includes(t.status);
+    const actions = isViewer() ? '' : (TRIP_ACTIONS[t.status] || [])
+      .map(([a, label]) => `<button class="theme-btn${a === 'cancel' ? ' danger' : ''}" onclick="event.stopPropagation();tripAction(${t.id},'${a}')">${label}</button>`).join('');
+    const pax = t.passengers.map(p => {
+      const end = p.alighted_at
+        ? `<span class="pax-done">${ico('check')} ${fmtTime(p.alighted_at)} · ${esc(p.alighted_location || p.drop_off_location)}</span>`
+        : canDrop ? `<button class="theme-btn pax-btn" onclick="event.stopPropagation();openDropForm(${t.id},${p.id})">Drop off</button>` : '';
+      return `<div class="vc-pax"><div><b>${esc(p.seat_label)}</b> — ${esc(p.passenger_name)}<div class="pax-plan">→ ${esc(p.drop_off_location)}</div></div>${end}</div>`;
+    }).join('');
+    return `
+    <div class="vehicle-card ${t.id===selectedTripId?'active':''}" onclick="selectTrip(${t.id})" style="border-left-color:${solid(colorKey(t.status, t.delayed))}">
+      <div class="vc-top"><span class="vc-name">${esc(t.model_name)}</span><span class="badges">${badgesFor(t)}</span></div>
+      <div class="vc-driver">${esc(t.driver_name)} · ${esc(t.plate_number)}</div>
+      <div class="vc-route">${esc(t.origin)} → ${esc(t.destination)} · ${fmtTime(t.scheduled_departure)}–${fmtTime(t.scheduled_arrival)}</div>
+      <div class="vc-route">${ico('users')} ${paxLabel(t)} · ${t.seat_count} seats</div>
+      ${veh ? fuelBar(veh.fuel) : ''}
+      ${pax ? `<div class="vc-paxlist">${pax}</div>` : ''}
+      ${actions ? `<div class="vc-actions">${actions}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function aiBoxHtml(d) {
+  return `<div class="ai-box ${esc(d.risk)}"><div class="eyebrow">${ico('sparkles')} AI PREDICTION</div><div>${esc(d.prediction)}</div><div class="ai-note">→ ${esc(d.suggestion)}</div><div class="ai-note ai-small">Confidence: ${esc(d.confidence||'—')}%</div></div>`;
+}
+
+function renderDetail() {
+  const panel = $('detailPanel');
+  const t = trips.find(x => x.id === selectedTripId);
+  if (!t) {
+    panel.innerHTML = '<div class="muted-note">Select a vehicle</div>';
+    return;
+  }
+  const veh = vehicles.find(v => v.trip_id === t.id);
+  const rows = [
+    ['Driver', t.driver_name], ['Plate No.', t.plate_number], ['Seats', t.seat_count],
+    ['Route', `${t.origin} → ${t.destination}`],
+    ['Departure (sched.)', (t.scheduled_departure || '').slice(0, 16)],
+    ['Arrival (sched.)',   (t.scheduled_arrival || '').slice(0, 16)],
+    ['Est. duration', fmtDuration(t.estimated_duration_minutes)],
+    ['Departed', t.actual_departure ? t.actual_departure.slice(0, 16) : '—'],
+    ['Arrived',  t.actual_arrival   ? t.actual_arrival.slice(0, 16)   : '—'],
+  ];
+  if (t.delayed) rows.push([t.status === 'arrived' ? 'Delay' : 'Late so far', `${t.late_minutes} min`]);
+  if (t.delay_reason) rows.push(['Delay reason', t.delay_reason]);
+  if (veh) rows.push(['Speed', `${veh.speed || 0} km/h`], ['ETA', veh.eta || '—'], ['Latitude', veh.latitude], ['Longitude', veh.longitude]);
+
+  panel.innerHTML = `
+    <div>
+      <div class="eyebrow">SELECTED VEHICLE</div>
+      <div class="detail-title">${esc(t.model_name)}</div>
+      <span class="badges">${badgesFor(t)}</span>
+    </div>
+    ${rows.map(([k, val]) => `<div class="detail-row"><span>${esc(k)}</span><span>${esc(val)}</span></div>`).join('')}
+    ${veh ? `<div><div class="eyebrow fuel-eyebrow">FUEL LEVEL</div>${fuelBar(veh.fuel)}</div>
+             ${isViewer() ? '' : `<div class="detail-actions"><button class="theme-btn" onclick="refuelVehicle(${veh.id})">Refuel</button></div>`}
+             ${aiByVehicle[veh.id] ? aiBoxHtml(aiByVehicle[veh.id]) : ''}` : ''}`;
+}
+
+/* ── AI PREDICTION ALERTS: only for trips on the road, from the real /api/ai/predict result ── */
+function buildAlerts() {
+  const out = [];
+  trips.filter(t => ON_THE_ROAD.includes(t.status)).forEach(t => {
+    const veh = vehicles.find(v => v.trip_id === t.id);
+    const route = `${t.origin} → ${t.destination}`;
+    const tag = `${STATUS[t.status].label} · ${t.plate_number}`;
+    if (t.delayed) {
+      out.push({ id:`late-${t.id}`, type:'warning', icon:'clock', time:tag,
+                 msg:`${esc(t.model_name)} is ${t.late_minutes} min late on ${esc(route)}` });
+    }
+    const ai = veh && aiByVehicle[veh.id];
+    if (ai) {
+      const type = { high:'warning', medium:'info', low:'success' }[ai.risk] || 'neutral';
+      const icon = { warning:'triangle-alert', info:'route', success:'check-circle', neutral:'info' }[type];
+      let msg = `<b>${esc(t.model_name)}</b> on ${esc(route)}: ${esc(ai.prediction)} — ${esc(ai.suggestion)}`;
+      const alts = ai.route_option && ai.route_option.alternatives || [];
+      if (alts.length) {
+        msg += `<br>Alternative route: ${alts.map(esc).join(' or ')}`;
+        if (ai.route_option.recommend_alternative) msg += ` (saves ${esc(ai.route_option.estimated_saving)})`;
+      }
+      out.push({ id:`ai-${t.id}`, type, icon, time:`${tag} · risk ${ai.risk} · ${ai.confidence || '—'}% confidence`, msg });
+    }
+  });
+  return out;
+}
+
+function renderAlerts() {
+  const onRoad = trips.some(t => ON_THE_ROAD.includes(t.status));
+  const active = buildAlerts().filter(a => !dismissedAlerts.includes(a.id));
+  $('alertCount').textContent = active.filter(a => a.type === 'warning' || a.type === 'info').length;
+  $('alertsList').innerHTML = !onRoad
+    ? '<div class="muted-note">No active trips</div>'
+    : !active.length
+      ? '<div class="muted-note">No active alerts</div>'
+      : active.map(a => `<div class="alert-item alert-${a.type}"><div><div class="alert-msg">${ico(a.icon)}${a.msg}</div><div class="alert-time">${esc(a.time)}</div></div><button class="dismiss-btn" onclick="dismissAlert('${a.id}')" aria-label="Dismiss">${ico('x')}</button></div>`).join('');
+}
+
+/* ── END OF DAY REPORT ── */
+function reportDelayCell(t) {
+  if (t.status === 'arrived' && !isViewer()) {
+    return `<div class="reason-wrap"><input class="login-field reason-input" id="reason-${t.id}" maxlength="255" placeholder="Reason for delay"
+              value="${esc(t.delay_reason || '')}" onkeydown="if(event.key==='Enter')saveDelayReason(${t.id})"/>
+            <button class="theme-btn" id="reasonBtn-${t.id}" onclick="saveDelayReason(${t.id})">Save</button></div>`;
+  }
+  return t.delay_reason ? esc(t.delay_reason) : '—';
+}
+function reportPassengers(t) {
+  if (isViewer()) return t.passengers_total ? `${t.passengers_total} passenger${t.passengers_total === 1 ? '' : 's'}` : '—';   // the server sends counts only
+  if (!t.passengers.length) return '—';
+  const idle = t.status === 'scheduled' ? 'booked, not departed' : t.status === 'cancelled' ? 'trip cancelled' : 'still on board';
+  return t.passengers.map(p => `<div>${esc(p.passenger_name)} – ${esc(p.seat_label)} – ` +
+    (p.alighted_at ? `got off at ${esc(p.alighted_location || p.drop_off_location)} ${fmtTime(p.alighted_at)}` : idle) + '</div>').join('');
+}
+
+function renderReport(force = false) {
+  const body = $('reportBody');
+  const a = document.activeElement;
+  if (!force && a && a.tagName === 'INPUT' && body.contains(a)) return;      // don't wipe what the user is typing
+  $('reportDate').textContent = selectedDate;
+  if (!flaskOnline) { body.innerHTML = '<tr><td colspan="10" class="report-empty">Server offline</td></tr>'; return; }
+  if (!trips.length) { body.innerHTML = '<tr><td colspan="10" class="report-empty">No trips for this date</td></tr>'; return; }
+  body.innerHTML = trips.map(t => {
+    const delay = t.status === 'scheduled' || t.status === 'cancelled' ? '—'
+      : t.status === 'arrived' ? `${t.delay_minutes}` : (t.late_minutes ? `${t.late_minutes} so far` : '0');
+    return `<tr>
+      <td>${esc(t.driver_name)}</td>
+      <td>${esc(t.model_name)}<div class="cell-sub">${esc(t.plate_number)}</div></td>
+      <td>${esc(t.origin)} → ${esc(t.destination)}</td>
+      <td>${fmtTime(t.scheduled_arrival)}</td>
+      <td>${fmtTime(t.actual_arrival)}</td>
+      <td><span class="badges">${badgesFor(t)}</span></td>
+      <td class="${t.delayed ? 'delay-cell' : ''}">${delay}</td>
+      <td>${reportDelayCell(t)}</td>
+      <td class="pax-cell">${reportPassengers(t)}</td>
+      <td><div class="row-actions">
+        <button class="theme-btn pdf-btn" ${pdfBusy ? 'disabled' : ''} onclick="downloadTripPdf(${t.id})">Download PDF</button>
+        <button class="theme-btn admin-only" onclick="openShare(${t.id})">Share</button>
+      </div></td>
+    </tr>` + (isViewer() ? '' : shareRowHtml(t));
+  }).join('');
+}
+
+/* PDF downloads: every button is disabled while one is loading; a failure is shown above the table */
+let pdfBusy = false;
+let reportMsgTimer = null;
+function setPdfBusy(busy) {
+  pdfBusy = busy;
+  document.querySelectorAll('.pdf-btn').forEach(b => { b.disabled = busy; });
+}
+function showReportMsg(text, isError) {
+  const el = $('reportMsg');
+  el.textContent = text;
+  el.classList.toggle('error', !!isError);
+  clearTimeout(reportMsgTimer);
+  if (text && !isError) reportMsgTimer = setTimeout(() => { el.textContent = ''; }, 5000);
+}
+
+async function downloadPdf(path, fallbackName) {
+  if (pdfBusy) return;
+  setPdfBusy(true);
+  showReportMsg('Preparing the PDF…', false);
+  try {
+    const r = await fetch(`${API}${path}`);
+    if (!r.ok) {
+      let why = `the server answered ${r.status}`;
+      try { const d = await r.json(); if (d.error) why = d.error; } catch(e) {}
+      throw new Error(why);
+    }
+    const blob = await r.blob();
+    const m = /filename="?([^";]+)"?/.exec(r.headers.get('Content-Disposition') || '');
+    const name = m ? m[1] : fallbackName;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    showReportMsg(`Downloaded ${name}`, false);
+  } catch(e) {
+    const offline = e instanceof TypeError;            // fetch() itself failed: server down / unreachable
+    showReportMsg(`PDF download failed: ${offline ? 'could not reach the server — is it running (python app.py)?' : e.message}`, true);
+  } finally {
+    setPdfBusy(false);
+  }
+}
+/* SHARE BY EMAIL. State lives here (not in the DOM) so the 10-second refresh can rebuild the table
+   without closing a box or clearing what the user typed. */
+const share = {};        // trip id -> { email, busy, msg, ok }
+let shareAll = null;     // null = closed, otherwise { email, busy, msg, ok }
+
+function shareBoxHtml(ids, s, label, send, cancel) {
+  return `<label for="${ids.input}">${label}</label>
+    <div class="share-line">
+      <input class="login-field share-input" id="${ids.input}" type="text" inputmode="email" maxlength="254" autocomplete="off"
+             placeholder="name@example.com" value="${esc(s.email)}"
+             oninput="${send.state}.email=this.value"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();${send.call};}"/>
+      <button class="theme-btn" id="${ids.btn}" ${s.busy ? 'disabled' : ''} onclick="${send.call}">${s.busy ? 'Sending...' : 'Send'}</button>
+      <a class="share-cancel" href="#" onclick="${cancel};return false;">Cancel</a>
+    </div>
+    <div class="share-msg ${s.msg ? (s.ok ? 'ok' : 'error') : ''}" id="${ids.msg}">${esc(s.msg)}</div>`;
+}
+function shareRowHtml(t) {
+  const s = share[t.id];
+  if (!s) return '';
+  return `<tr class="share-row"><td colspan="10"><div class="share-box">` +
+    shareBoxHtml({ input:`shareEmail-${t.id}`, btn:`shareBtn-${t.id}`, msg:`shareMsg-${t.id}` }, s,
+      'Email this trip report (PDF) to', { state:`share[${t.id}]`, call:`sendShare(${t.id})` }, `closeShare(${t.id})`) +
+    `</div></td></tr>`;
+}
+/* update a box in place (no rebuild, so focus and typed text stay put) */
+function paintShare(ids, s) {
+  const btn = $(ids.btn), msg = $(ids.msg);
+  if (btn) { btn.disabled = s.busy; btn.textContent = s.busy ? 'Sending...' : 'Send'; }
+  if (msg) { msg.textContent = s.msg; msg.className = 'share-msg ' + (s.msg ? (s.ok ? 'ok' : 'error') : ''); }
+}
+
+async function postShare(url, s, ids) {
+  if (s.busy) return;
+  const email = s.email.trim();
+  if (!email) { s.ok = false; s.msg = 'Enter an email address.'; paintShare(ids, s); return; }
+  s.busy = true; s.msg = ''; paintShare(ids, s);
+  try {
+    const r = await fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ email }) });
+    const d = await r.json().catch(() => ({}));
+    s.ok = r.ok;
+    s.msg = r.ok ? (d.message || `Sent to ${email}`) : (d.error || `The server answered ${r.status}`);
+  } catch(e) {
+    s.ok = false;
+    s.msg = 'Could not reach the server — is it running (python app.py)?';
+  } finally {
+    s.busy = false;
+    paintShare(ids, s);
+  }
+}
+
+function openShare(id) {
+  if (!share[id]) share[id] = { email:'', busy:false, msg:'', ok:false };
+  renderReport(true);
+  const input = $(`shareEmail-${id}`);
+  if (input) input.focus();
+}
+function closeShare(id) { delete share[id]; renderReport(true); }
+function sendShare(id) {
+  const s = share[id];
+  if (s) return postShare(`${API}/api/trips/${id}/report/email`, s, { btn:`shareBtn-${id}`, msg:`shareMsg-${id}` });
+}
+
+function renderShareAll() {
+  const box = $('shareAllBox');
+  if (!shareAll) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.classList.remove('hidden');
+  box.innerHTML = shareBoxHtml({ input:'shareAllEmail', btn:'shareAllSend', msg:'shareAllMsg' }, shareAll,
+    `Email the whole-day report (${esc(selectedDate)}, PDF) to`, { state:'shareAll', call:'sendShareAll()' }, 'closeShareAll()');
+}
+function openShareAll() {
+  if (!shareAll) shareAll = { email:'', busy:false, msg:'', ok:false };
+  renderShareAll();
+  $('shareAllEmail').focus();
+}
+function closeShareAll() { shareAll = null; renderShareAll(); }
+function sendShareAll() {
+  if (shareAll) return postShare(`${API}/api/trips/report/email?date=${encodeURIComponent(selectedDate)}`, shareAll,
+                                 { btn:'shareAllSend', msg:'shareAllMsg' });
+}
+
+function pdfPrefix() { return (appConfig.company_name || 'Fleet').split(' ')[0]; }
+function downloadTripPdf(id) {
+  const t = trips.find(x => x.id === id);
+  return downloadPdf(`/api/trips/${id}/report.pdf`, `${pdfPrefix()}_Trip_Report_${t ? t.plate_number : id}_${t ? t.trip_date : selectedDate}.pdf`);
+}
+function downloadDayPdf() {
+  return downloadPdf(`/api/trips/report.pdf?date=${encodeURIComponent(selectedDate)}`, `${pdfPrefix()}_End_of_Day_Report_${selectedDate}.pdf`);
+}
+
+async function saveDelayReason(id) {
+  const input = $(`reason-${id}`), btn = $(`reasonBtn-${id}`);
+  if (!input) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/api/trips/${id}/delay-reason`, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify({ delay_reason: input.value }) });
+    const d = await r.json();
+    if (!r.ok) { alert(d.error || 'Could not save the reason'); btn.disabled = false; return; }
+    btn.innerHTML = `Saved ${ico('check')}`;
+    input.blur();
+    await fetchAll();
+  } catch(e) {
+    alert('Could not save the reason — is the server running?');
+    btn.disabled = false;
+  }
+}
+
+/* ── ACTIONS ── */
+function selectTrip(id) {
+  selectedTripId = id;
+  renderSidebar(); renderMarkers(); renderDetail();
+  const veh = vehicles.find(v => v.trip_id === id);
+  if (veh && leafletMap) leafletMap.panTo([veh.latitude, veh.longitude], { animate:true, duration:0.8 });
+}
+function dismissAlert(id) { dismissedAlerts.push(id); renderAlerts(); }
+
+let actionMsgTimer = null;
+function showActionMsg(text) {            // a small message in the sidebar instead of a browser popup
+  const el = $('actionMsg');
+  el.textContent = text;
+  el.classList.remove('hidden');
+  clearTimeout(actionMsgTimer);
+  actionMsgTimer = setTimeout(() => el.classList.add('hidden'), 8000);
+}
+
+async function tripAction(id, action) {
+  if (action === 'edit') { openEditTrip(id); return; }
+  if (action === 'cancel' || action === 'arrive') { askConfirm(action, id); return; }   // confirmation modal
+  await sendTripAction(id, action);
+}
+async function sendTripAction(id, action) {
+  try {
+    const r = await fetch(`${API}/api/trips/${id}/${action}`, { method:'POST', headers:{ 'Content-Type':'application/json' }, body:'{}' });
+    const d = await r.json();
+    if (!r.ok) showActionMsg(d.error || 'That action failed');
+  } catch(e) {
+    showActionMsg('Action failed — is the server running?');
+  }
+  await fetchAll();
+}
+
+/* ── CONFIRMATION MODAL (cancel / arrive) ── */
+let confirmCtx = null;                    // { kind, id }
+function askConfirm(kind, id) {
+  const t = trips.find(x => x.id === id);
+  if (!t) return;
+  const what = `${t.model_name} (${t.plate_number}), ${t.origin} → ${t.destination}, ${fmtTime(t.scheduled_departure)}`;
+  const texts = {
+    cancel: { title: 'Cancel this trip?', yes: 'Yes, cancel the trip', danger: true,
+              text: `${what}. It will be removed.` },
+    arrive: { title: 'Mark as arrived?', yes: 'Yes, mark as arrived', danger: false,
+              text: `${what} will be marked as arrived now.` },
+  }[kind];
+  confirmCtx = { kind, id };
+  $('confirmTitle').textContent = texts.title;
+  $('confirmText').textContent = texts.text;
+  $('confirmError').textContent = '';
+  const yes = $('confirmYes');
+  yes.textContent = texts.yes; yes.classList.toggle('danger', texts.danger); yes.disabled = false;
+  $('confirmModal').classList.remove('hidden');
+  $('confirmNo').focus();
+}
+function closeConfirm() { $('confirmModal').classList.add('hidden'); confirmCtx = null; }
+
+async function runConfirm() {
+  if (!confirmCtx) return;
+  const { kind, id } = confirmCtx;
+  const yes = $('confirmYes');
+  yes.disabled = true; $('confirmError').textContent = '';
+  try {
+    if (kind.startsWith('remove-')) {      // remove a driver / vehicle: the server decides between delete and keep-for-reports
+      const what = kind.slice(7);
+      const r = await fetch(`${API}/api/admin/${what === 'driver' ? 'drivers' : 'vehicles'}/${id}`, { method: 'DELETE' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { $('confirmError').textContent = d.error || `The server answered ${r.status}`; return; }   // e.g. "Cancel or finish trip #N first."
+      closeConfirm();
+      await afterRemoveOrRestore(what, d.message);
+      return;
+    }
+    if (kind.startsWith('user-')) {        // reject / revoke a member (Settings page)
+      const err = await userAction(id, kind.slice(5));
+      if (err) { $('confirmError').textContent = err; return; }
+      closeConfirm();
+      return;
+    }
+    const r = kind === 'cancel'            // cancelling a scheduled trip removes it completely
+      ? await fetch(`${API}/api/trips/${id}`, { method:'DELETE' })
+      : await fetch(`${API}/api/trips/${id}/${kind}`, { method:'POST', headers:{ 'Content-Type':'application/json' }, body:'{}' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) {                           // the server's reason, shown in the modal (the trip may have changed meanwhile: refresh too)
+      $('confirmError').textContent = d.error || `The server answered ${r.status}`;
+      fetchAll();
+      return;
+    }
+    closeConfirm();
+    await fetchAll();                      // cards, KPI cards, markers, alerts and the report all refresh
+  } catch(e) {
+    $('confirmError').textContent = 'Could not reach the server — is it running (python app.py)?';
+  } finally {
+    yes.disabled = false;
+  }
+}
+
+/* ── EDIT A SCHEDULED TRIP ── */
+let editCtx = null;                       // { id, seats, origin, dep, arr } while the Edit modal is open
+function dropOptions(selected) {          // town list for a drop-off; keeps an unusual existing value selectable
+  const towns = townNames();
+  const extra = selected && !towns.includes(selected) ? `<option value="${esc(selected)}" selected>${esc(selected)}</option>` : '';
+  return '<option value="">Drop-off: point B</option>' +
+    towns.map(t => `<option value="${esc(t)}" ${t === selected ? 'selected' : ''}>${esc(t)}</option>`).join('') + extra;
+}
+async function openEditTrip(id) {
+  const t = trips.find(x => x.id === id);
+  if (!t) return;
+  if (t.status !== 'scheduled') { showActionMsg(`Only scheduled trips can be edited (this one is ${t.status}).`); return; }
+  if (!townNames().length) await loadConfig();
+  const dep = (t.scheduled_departure || '').slice(0, 16).replace(' ', 'T'), arr = (t.scheduled_arrival || '').slice(0, 16).replace(' ', 'T');
+  editCtx = { id, seats: t.seat_count, origin: t.origin, dep, arr };
+  $('editTitle').textContent = `Edit Trip #${t.id}`;
+  $('eVehicle').value = `${t.plate_number} - ${t.model_name}`;
+  $('eOrigin').value = t.origin;
+  $('eDriver').value = t.driver_name || '';
+  $('eDest').innerHTML = townOptions('Select point B…', t.destination);
+  $('eDep').value = dep; $('eArr').value = arr;
+  $('ePaxRows').innerHTML = '';
+  t.passengers.forEach(p => editAddPassengerRow(p));
+  $('editError').textContent = '';
+  refreshEditPassengers(); updateEditDuration();
+  $('editModal').classList.remove('hidden');
+  $('eDest').focus();
+}
+function closeEditTrip() { $('editModal').classList.add('hidden'); editCtx = null; }
+
+function updateEditDuration() {
+  const line = $('eDuration'), dep = $('eDep').value, arr = $('eArr').value;
+  line.classList.remove('bad');
+  if (!dep || !arr) { line.textContent = 'Estimated duration: —'; return null; }
+  const mins = Math.round((new Date(arr) - new Date(dep)) / 60000);
+  if (mins <= 0) { line.textContent = 'Arrival must be after departure'; line.classList.add('bad'); return null; }
+  line.textContent = `Estimated duration: ${fmtDuration(mins)} (${mins} min)`;
+  return mins;
+}
+
+function editAddPassengerRow(p) {         // p = an existing passenger (pre-fill), or nothing for a new blank row
+  if (!editCtx) return;
+  const rows = $('ePaxRows');
+  if (!p && rows.children.length >= editCtx.seats) {
+    $('editError').textContent = `This vehicle only has ${editCtx.seats} seat${editCtx.seats === 1 ? '' : 's'}.`;
+    return;
+  }
+  $('editError').textContent = '';
+  const row = document.createElement('div');
+  row.className = 'pax-row';
+  if (p) row.dataset.pid = p.id;          // an existing passenger keeps its id; a row without one is added
+  row.innerHTML = `
+    <input class="login-field pax-name" maxlength="100" placeholder="Passenger name" autocomplete="off" value="${esc(p ? p.passenger_name : '')}"/>
+    <select class="login-field pax-seat" data-want="${esc(p ? p.seat_label : '')}" onchange="refreshEditPassengers()"></select>
+    <select class="login-field pax-drop">${dropOptions(p ? p.drop_off_location : $('eDest').value)}</select>
+    <button type="button" class="theme-btn" onclick="this.parentElement.remove();refreshEditPassengers()">Remove</button>`;
+  rows.appendChild(row);
+  refreshEditPassengers();
+  if (!p) row.querySelector('.pax-name').focus();
+}
+
+/* same seat logic as the Add Trip form, on this modal's rows: valid unique choices are kept, seatless rows get the next
+   free seat, and a seat another row holds is disabled so two passengers can't share one */
+function refreshEditPassengers() {
+  const n = editCtx ? editCtx.seats : 0, layout = seatLabels(n);
+  const rows = [...document.querySelectorAll('#ePaxRows .pax-row')];
+  const taken = new Set();
+  const want = rows.map(r => {
+    const sel = r.querySelector('.pax-seat');
+    const s = sel.value || sel.dataset.want || '';
+    sel.dataset.want = '';
+    if (layout.includes(s) && !taken.has(s)) { taken.add(s); return s; }
+    return '';
+  });
+  const free = layout.filter(s => !taken.has(s));
+  rows.forEach((r, i) => { if (!want[i] && free.length) want[i] = free.shift(); });
+  rows.forEach((r, i) => {
+    const sel = r.querySelector('.pax-seat');
+    sel.innerHTML = layout.map(s => `<option value="${esc(s)}" ${want.includes(s) && want[i] !== s ? 'disabled' : ''}>${esc(s)}</option>`).join('');
+    sel.value = want[i] || '';
+  });
+  $('ePaxCount').textContent = `· ${rows.length} / ${n || '?'}`;
+}
+
+function collectEdit() {
+  const errors = [];
+  const dest = $('eDest').value, dep = $('eDep').value, arr = $('eArr').value;
+  if (!dest) errors.push('Choose point B.');
+  if (dest && dest === editCtx.origin) errors.push('Point A and point B must be different towns.');
+  if (!dep) errors.push('Departure time is required.');
+  if (!arr) errors.push('Expected arrival time is required.');
+  if (dep && arr && updateEditDuration() === null) errors.push('Expected arrival must be after the departure time.');
+  const rows = [...document.querySelectorAll('#ePaxRows .pax-row')], used = new Set(), passengers = [];
+  if (rows.length > editCtx.seats) errors.push(`${rows.length} passengers exceed the ${editCtx.seats} seats.`);
+  rows.forEach((r, i) => {
+    const name = r.querySelector('.pax-name').value.trim(), seat = r.querySelector('.pax-seat').value, drop = r.querySelector('.pax-drop').value;
+    if (!name) errors.push(`Passenger ${i + 1}: name is required.`);
+    if (!seat) errors.push(`Passenger ${i + 1}: no seat available.`);
+    else if (used.has(seat)) errors.push(`Passenger ${i + 1}: seat "${seat}" is already taken.`);
+    else used.add(seat);
+    const item = { passenger_name: name, seat_label: seat, drop_off_location: drop || dest };
+    if (r.dataset.pid) item.id = Number(r.dataset.pid);
+    passengers.push(item);
+  });
+  const payload = { destination: dest, passengers };
+  if (dep !== editCtx.dep) payload.scheduled_departure = dep.replace('T', ' ');      // send only what changed
+  if (arr !== editCtx.arr) payload.scheduled_arrival = arr.replace('T', ' ');
+  return { errors, payload };
+}
+
+async function submitEdit(e) {
+  e.preventDefault();
+  if (!editCtx) return;
+  const out = $('editError');
+  const { errors, payload } = collectEdit();
+  if (errors.length) { out.textContent = errors.join('\n'); return; }
+  out.textContent = '';
+  const btn = $('editSaveBtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    const r = await fetch(`${API}/api/trips/${editCtx.id}`, { method:'PUT', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload) });
+    const d = await r.json();
+    if (!r.ok) { out.textContent = serverMessage(d, 'Could not save the changes'); fetchAll(); return; }
+    closeEditTrip();
+    selectedDate = d.trip_date;            // the departure may have moved to another day: show that day
+    $('datePicker').value = selectedDate;
+    selectedTripId = d.id;
+    await fetchAll();
+  } catch(err) {
+    out.textContent = 'Could not reach the server — is it running (python app.py)?';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save changes';
+  }
+}
+
+async function refuelVehicle(id) {
+  const amtStr = prompt('Enter fuel to ADD (1-100):', '50');
+  if (!amtStr) return;
+  const amt = Math.max(0, Math.min(100, Number(amtStr)));
+  const start = confirm('Start vehicle after refuel? OK=Start, Cancel=Keep idle');
+  try {
+    await fetch(`${API}/api/vehicles/${id}/refuel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: amt, start: start })
+    });
+    await fetchAll();
+    alert('Vehicle refueled');
+  } catch (e) {
+    alert('Refuel failed — check server logs');
+  }
+}
+
+/* ── PASSENGER DROP-OFF ── */
+function townNames() { return Object.keys(appConfig.towns || {}); }
+function townOptions(placeholder, selected) {
+  return `<option value="">${esc(placeholder)}</option>` +
+    townNames().map(t => `<option value="${esc(t)}" ${t === selected ? 'selected' : ''}>${esc(t)}</option>`).join('');
+}
+
+async function openDropForm(tripId, passengerId) {
+  const t = trips.find(x => x.id === tripId), p = t && t.passengers.find(x => x.id === passengerId);
+  if (!p) return;
+  if (!townNames().length) await loadConfig();
+  dropCtx = { tripId, passengerId };
+  $('dropWho').innerHTML = `<b>${esc(p.passenger_name)}</b> · ${esc(p.seat_label)} · ${esc(t.model_name)} (${esc(t.plate_number)})`;
+  $('dropSelect').innerHTML = townOptions('Choose a town…', p.drop_off_location);    // default: the planned drop-off
+  $('dropError').textContent = '';
+  $('dropModal').classList.remove('hidden');
+  $('dropSelect').focus();
+}
+function closeDropForm() { $('dropModal').classList.add('hidden'); dropCtx = null; }
+
+async function submitDrop() {
+  if (!dropCtx) return;
+  const location = $('dropSelect').value;
+  if (!location) { $('dropError').textContent = 'Choose where the passenger is getting off.'; return; }
+  const btn = $('dropBtn');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/api/trips/${dropCtx.tripId}/alight`, { method:'POST', headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ passenger_id: dropCtx.passengerId, location }) });
+    const d = await r.json();
+    if (!r.ok) { $('dropError').textContent = (d.details && d.details.length ? d.details : [d.error || 'Could not record the drop-off']).join('\n'); return; }
+    closeDropForm();
+    await fetchAll();
+  } catch(e) {
+    $('dropError').textContent = 'Could not reach the server — is it running (python app.py)?';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ── ADD VEHICLE / TRIP FORM ── */
+const PLATE_RE = /^[A-Za-z0-9-]{3,15}$/;
+
+function seatLabels(n) {            // same layout as the server: Front, then rows of three
+  const pos = ['Left', 'Middle', 'Right'], out = ['Front'];
+  for (let i = 0; i < n - 1; i++) out.push(`Row ${Math.floor(i / 3) + 2} - ${pos[i % 3]}`);
+  return out.slice(0, n);
+}
+function getSeats() {
+  const n = Number($('fSeats').value);
+  return Number.isInteger(n) && n >= 1 && n <= 60 ? n : 0;
+}
+function pad(n) { return String(n).padStart(2, '0'); }
+function localInput(d) { return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+
+async function openAddForm() {
+  if (!townNames().length) await loadConfig();
+  $('addForm').reset();
+  $('paxRows').innerHTML = '';
+  $('formError').textContent = '';
+  resetVehicleFields();
+  $('fOrigin').innerHTML = townOptions('Select point A…');
+  $('fDest').innerHTML   = townOptions('Select point B…');
+  let dep;                                    // default departure: soon if today, else 08:00 on the chosen date
+  if (selectedDate === todayStr()) { dep = new Date(Date.now() + 15 * 60000); dep.setMinutes(Math.ceil(dep.getMinutes() / 5) * 5, 0, 0); }
+  else dep = new Date(`${selectedDate}T08:00`);
+  $('fDep').value = localInput(dep);
+  updateDuration();
+  refreshPassengers();
+  $('addModal').classList.remove('hidden');
+  const [problem, driverProblem] = await Promise.all([loadFleet(), loadDriverChoices()]);   // always current: a vehicle or driver added a moment ago is there
+  if (problem || driverProblem) $('formError').textContent = [problem, driverProblem].filter(Boolean).join('\n');
+  $('fFleetSearch').focus();
+}
+function closeAddForm() { $('addModal').classList.add('hidden'); }
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (!$('registerModal').classList.contains('hidden')) closeRegisterForm();
+  if (!$('addModal').classList.contains('hidden')) closeAddForm();
+  if (!$('dropModal').classList.contains('hidden')) closeDropForm();
+  if (!$('editModal').classList.contains('hidden')) closeEditTrip();
+  if (!$('vehEditModal').classList.contains('hidden')) closeVehEdit();
+  if (!$('drvModal').classList.contains('hidden')) closeDriverForm();
+  if (!$('confirmModal').classList.contains('hidden')) closeConfirm();
+});
+
+function updateDuration() {
+  const line = $('durationLine'), dep = $('fDep').value, arr = $('fArr').value;
+  line.classList.remove('bad');
+  if (!dep || !arr) { line.textContent = 'Estimated duration: —'; return null; }
+  const mins = Math.round((new Date(arr) - new Date(dep)) / 60000);
+  if (mins <= 0) { line.textContent = 'Arrival must be after departure'; line.classList.add('bad'); return null; }
+  line.textContent = `Estimated duration: ${fmtDuration(mins)} (${mins} min)`;
+  return mins;
+}
+
+function onDestChange() {           // drop-off defaults follow point B until the user picks one
+  document.querySelectorAll('#paxRows .pax-drop').forEach(sel => { if (!sel.dataset.touched) sel.value = $('fDest').value; });
+}
+
+function addPassengerRow() {
+  const seats = getSeats();
+  $('formError').textContent = '';
+  if (vehicleMode === 'none') { $('formError').textContent = 'Choose a vehicle name first.'; $('fFleetSearch').focus(); return; }
+  if (vehicleMode === 'fleet' && !chosenPlate) { $('formError').textContent = 'Choose the plate number first.'; $('fPlateSelect').focus(); return; }
+  if (!seats) { $('formError').textContent = 'Enter the number of seats first.'; $('fSeats').focus(); return; }
+  if ($('paxRows').children.length >= seats) { $('formError').textContent = `This vehicle only has ${seats} seat${seats === 1 ? '' : 's'}.`; return; }
+  const row = document.createElement('div');
+  row.className = 'pax-row';
+  row.innerHTML = `
+    <input class="login-field pax-name" maxlength="100" placeholder="Passenger name" autocomplete="off"/>
+    <select class="login-field pax-seat" onchange="refreshPassengers()"></select>
+    <select class="login-field pax-drop" onchange="this.dataset.touched=1">${townOptions('Drop-off: point B', $('fDest').value)}</select>
+    <button type="button" class="dismiss-btn" title="Remove passenger" aria-label="Remove passenger" onclick="this.parentElement.remove();refreshPassengers()">${ico('x')}</button>`;
+  $('paxRows').appendChild(row);
+  refreshPassengers();
+  row.querySelector('.pax-name').focus();
+}
+
+/* Rebuild every seat dropdown from the layout: keep valid unique choices, give seatless rows the next free seat,
+   and disable seats another row already holds so two passengers can't share one. */
+function refreshPassengers() {
+  const n = getSeats(), layout = seatLabels(n);
+  const rows = [...document.querySelectorAll('#paxRows .pax-row')];
+  const taken = new Set();
+  const want = rows.map(r => {
+    const s = r.querySelector('.pax-seat').value;
+    if (layout.includes(s) && !taken.has(s)) { taken.add(s); return s; }
+    return '';
+  });
+  const free = layout.filter(s => !taken.has(s));
+  rows.forEach((r, i) => { if (!want[i] && free.length) want[i] = free.shift(); });
+  rows.forEach((r, i) => {
+    const sel = r.querySelector('.pax-seat');
+    sel.innerHTML = layout.map(s =>
+      `<option value="${esc(s)}" ${want.includes(s) && want[i] !== s ? 'disabled' : ''}>${esc(s)}</option>`).join('');
+    sel.value = want[i] || '';
+  });
+  $('paxCount').textContent = `· ${rows.length} / ${n || '?'}`;
+}
+
+function collectForm() {
+  const errors = [];
+  const isNew = vehicleMode === 'new';
+  const plate = isNew ? $('fPlate').value.trim() : chosenPlate;
+  const registered = fleet.find(v => v.plate_number === chosenPlate);
+  const model = isNew ? $('fModel').value.trim() : (registered ? registered.model_name : ''), driverId = Number($('fDriver').value);
+  const origin = $('fOrigin').value, dest = $('fDest').value, dep = $('fDep').value, arr = $('fArr').value;
+  const seats = getSeats();
+
+  if (vehicleMode === 'none') errors.push('Choose a vehicle name from the list, or "+ New vehicle".');
+  else {
+    if (!plate) errors.push(isNew ? 'Plate number is required.' : 'Choose the plate number.');
+    else if (!PLATE_RE.test(plate)) errors.push('Plate number must be 3 to 15 characters: letters, digits and hyphens only.');
+    if (!model)  errors.push('Vehicle name is required.');
+    if (!seats)  errors.push('Number of seats must be a whole number from 1 to 60.');
+  }
+  if (!driverId) errors.push($('fDriver').options.length > 1 ? 'Choose a driver.' : 'There is no active driver yet: add one on the Drivers page first.');
+  if (!origin) errors.push('Choose point A.');
+  if (!dest)   errors.push('Choose point B.');
+  if (origin && origin === dest) errors.push('Point A and point B must be different towns.');
+  if (!dep) errors.push('Departure time is required.');
+  if (!arr) errors.push('Expected arrival time is required.');
+  if (dep && arr && updateDuration() === null) errors.push('Expected arrival must be after the departure time.');
+
+  const passengers = [], usedSeats = new Set();
+  const rows = [...document.querySelectorAll('#paxRows .pax-row')];
+  if (seats && rows.length > seats) errors.push(`${rows.length} passengers exceed the ${seats} seats.`);
+  rows.forEach((r, i) => {
+    const name = r.querySelector('.pax-name').value.trim(), seat = r.querySelector('.pax-seat').value;
+    const drop = r.querySelector('.pax-drop').value;
+    if (!name) errors.push(`Passenger ${i + 1}: name is required.`);
+    if (!seat) errors.push(`Passenger ${i + 1}: no seat available.`);
+    else if (usedSeats.has(seat)) errors.push(`Passenger ${i + 1}: seat "${seat}" is already taken.`);
+    else usedSeats.add(seat);
+    passengers.push({ passenger_name: name, seat_label: seat, drop_off_location: drop || dest });
+  });
+
+  return { errors, isNew, payload: {
+    plate_number: plate, model_name: model, seat_count: seats, driver_id: driverId || null,
+    origin, destination: dest,
+    scheduled_departure: dep.replace('T', ' '), scheduled_arrival: arr.replace('T', ' '),
+    passengers,
+  }};
+}
+
+const serverMessage = (d, fallback) => (d.details && d.details.length ? d.details : [d.error || fallback]).join('\n');
+
+async function submitAddForm(e) {
+  e.preventDefault();
+  const out = $('formError');
+  const { errors, payload, isNew } = collectForm();
+  if (errors.length) { out.textContent = errors.join('\n'); return; }
+  out.textContent = '';
+  const btn = $('submitBtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  let registered = false;
+  try {
+    if (isNew) {                              // "+ New vehicle": register it first, then create the trip
+      const rv = await fetch(`${API}/api/fleet`, { method:'POST', headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ plate_number: payload.plate_number, model_name: payload.model_name, seat_count: payload.seat_count }) });
+      const dv = await rv.json();
+      if (!rv.ok) { out.textContent = serverMessage(dv, 'Could not register the vehicle'); return; }   // no trip is created
+      registered = true;
+      fleet = sortFleet([...fleet.filter(v => v.plate_number !== dv.plate_number), dv]);
+      selectFleetVehicle(dv);                 // the form now shows it as a registered vehicle, so a retry won't register it twice
+    }
+    const r = await fetch(`${API}/api/trips`, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload) });
+    const d = await r.json();
+    if (!r.ok) {
+      out.textContent = (registered ? `Vehicle ${payload.plate_number} was registered, but the trip could not be created:\n` : '') + serverMessage(d, 'Could not save the trip');
+      return;
+    }
+    closeAddForm();
+    selectedDate = d.trip_date;             // show the day the trip belongs to
+    $('datePicker').value = selectedDate;
+    selectedTripId = d.id;
+    await fetchAll();
+  } catch(err) {
+    out.textContent = 'Could not reach the server — is it running (python app.py)?';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Create Trip';
+  }
+}
+
+/* ── FLEET: choose a vehicle NAME (searchable), then its PLATE. The plate is the unique identifier; names may repeat. ── */
+let fleet = [];                 // GET /api/fleet -> [{plate_number, model_name, seat_count}]
+let vehicleMode = 'none';       // 'none' | 'fleet' (a registered vehicle name is chosen) | 'new' ("+ New vehicle")
+let chosenName = '';            // the vehicle name picked from the list
+let chosenPlate = '';           // set once the plate is known: automatically for a one-plate name, or picked by the user
+const NEW_VEHICLE = '__new__';
+const sortFleet = list => [...list].sort((a, b) => a.model_name.localeCompare(b.model_name) || a.plate_number.localeCompare(b.plate_number));
+const fleetLabel = v => `${v.plate_number} - ${v.model_name}`;
+const sameName = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();   // "Toyota Sienna" == "toyota sienna"
+const platesFor = name => fleet.filter(v => sameName(v.model_name, name)).map(v => v.plate_number).sort();
+function fleetNames() {         // each distinct vehicle name once, sorted. Spellings that differ only in letter case are one name;
+  const groups = new Map();     // the one shown is the most used spelling (ties: plain character order, so "Toyota" beats "toyota").
+  fleet.forEach(v => {
+    const k = v.model_name.trim().toLowerCase(), n = v.model_name.trim();
+    const g = groups.get(k) || new Map(); g.set(n, (g.get(n) || 0) + 1); groups.set(k, g);
+  });
+  const shown = [...groups.values()].map(g => [...g.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0][0]);
+  return shown.sort((a, b) => a.localeCompare(b));
+}
+
+async function loadDriverChoices() {          // active drivers only (name and phone), from the admin-only drivers route
+  const sel = $('fDriver');
+  try {
+    const r = await fetch(`${API}/api/admin/drivers`);
+    if (!r.ok) throw new Error(`the server answered ${r.status}`);
+    const list = (await r.json()).filter(d => d.status === 'active');
+    sel.innerHTML = '<option value="">Choose a driver…</option>' +
+      list.map(d => `<option value="${d.id}">${esc(d.name)}${d.phone ? ' — ' + esc(d.phone) : ''}</option>`).join('');
+    return list.length ? '' : 'There is no active driver yet: add one on the Drivers page first.';
+  } catch (e) { return `Could not load the driver list (${e.message}).`; }
+}
+async function loadFleet() {
+  try { fleet = sortFleet(await getJSON(`${API}/api/fleet`)); return ''; }
+  catch (e) { return `Could not load the vehicle list (${e.message}). You can still use "+ New vehicle".`; }
+}
+function lockVehicleFields(locked) { $('fSeats').readOnly = locked; }          // vehicle name is typed only in "+ New vehicle" mode
+function currentVehicleLabel() { return vehicleMode === 'new' ? '+ New vehicle' : vehicleMode === 'fleet' ? chosenName : ''; }
+
+/* The plate field has four faces: disabled (no name yet), read-only (one plate), a dropdown (several plates), typed (new vehicle). */
+function setPlateField(kind, plate = '', plates = []) {
+  const p = $('fPlate'), sel = $('fPlateSelect');
+  sel.classList.toggle('hidden', kind !== 'select');
+  p.classList.toggle('hidden', kind === 'select');
+  p.disabled = kind === 'disabled';
+  p.readOnly = kind === 'readonly';
+  p.value = (kind === 'readonly') ? plate : '';
+  p.placeholder = kind === 'disabled' ? 'Choose a vehicle name first' : 'e.g. AWK-234-XA';
+  if (kind === 'select') sel.innerHTML = '<option value="">Choose a plate number…</option>' + plates.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
+}
+function resetVehicleFields() {
+  vehicleMode = 'none'; chosenName = ''; chosenPlate = '';
+  $('fFleetSearch').value = '';
+  $('newNameWrap').classList.add('hidden');
+  setPlateField('disabled');
+  $('fModel').value = ''; $('fSeats').value = '';
+  lockVehicleFields(true);
+}
+function clearVehicleDetails() { chosenPlate = ''; $('fSeats').value = ''; refreshPassengers(); }
+function setVehicle(v) {                  // the plate is known: its seats (read-only) follow
+  chosenPlate = v.plate_number;
+  $('fSeats').value = v.seat_count;
+  lockVehicleFields(true);
+  refreshPassengers();                    // "0 / <seats>" and the seat dropdowns follow this vehicle's layout
+}
+
+function chooseName(name) {
+  closeFleetList();
+  if (name === NEW_VEHICLE) {             // reveal a typed name, plate and seats
+    vehicleMode = 'new'; chosenName = ''; chosenPlate = '';
+    $('fFleetSearch').value = currentVehicleLabel();
+    $('newNameWrap').classList.remove('hidden');
+    setPlateField('typed');
+    $('fModel').value = ''; $('fSeats').value = '';
+    lockVehicleFields(false); refreshPassengers();
+    $('fModel').focus();
+    return;
+  }
+  const plates = platesFor(name);
+  if (!plates.length) return;
+  vehicleMode = 'fleet'; chosenName = fleetNames().find(n => sameName(n, name)) || name.trim(); chosenPlate = '';
+  $('fFleetSearch').value = chosenName;
+  $('newNameWrap').classList.add('hidden');
+  if (plates.length === 1) {              // exactly one vehicle has this name: fill its plate in (read-only)
+    setPlateField('readonly', plates[0]);
+    setVehicle(fleet.find(v => v.plate_number === plates[0]));
+  } else {                                // several share the name: the user must choose a plate
+    setPlateField('select', '', plates);
+    clearVehicleDetails();
+    $('fPlateSelect').focus();
+  }
+}
+function onPlateSelect() {
+  const v = fleet.find(x => x.plate_number === $('fPlateSelect').value);
+  if (v) setVehicle(v); else clearVehicleDetails();
+}
+function selectFleetVehicle(v) {          // show an exact vehicle (used right after "+ New vehicle" registered one)
+  chooseName(v.model_name);
+  if (!$('fPlateSelect').classList.contains('hidden')) { $('fPlateSelect').value = v.plate_number; onPlateSelect(); }
+}
+
+let fleetActive = -1;
+const fleetItems = () => [...$('fleetList').querySelectorAll('.combo-item')];
+function renderFleetList(query = '') {    // search works by vehicle name only
+  const q = query.trim().toLowerCase();
+  const names = fleetNames().filter(n => !q || n.toLowerCase().includes(q));
+  $('fleetList').innerHTML =
+    names.map(n => `<div class="combo-item" role="option" data-name="${esc(n)}">${esc(n)}</div>`).join('') +
+    (names.length ? '' : `<div class="combo-empty">No vehicle name matches "${esc(query.trim())}"</div>`) +
+    `<div class="combo-item combo-new" role="option" data-name="${NEW_VEHICLE}">+ New vehicle</div>`;      // always the last option
+  setFleetActive(-1);
+}
+function openFleetList(query) { renderFleetList(query); $('fleetList').classList.remove('hidden'); $('fFleetSearch').setAttribute('aria-expanded', 'true'); }
+function closeFleetList() { $('fleetList').classList.add('hidden'); $('fFleetSearch').setAttribute('aria-expanded', 'false'); }
+function setFleetActive(i) {
+  const items = fleetItems();
+  items.forEach(x => x.classList.remove('active'));
+  fleetActive = items.length && i >= 0 ? (i + items.length) % items.length : -1;
+  if (fleetActive >= 0) { items[fleetActive].classList.add('active'); items[fleetActive].scrollIntoView({ block: 'nearest' }); }
+}
+(function wireFleetCombo() {
+  const input = $('fFleetSearch'), list = $('fleetList');
+  input.addEventListener('focus', () => { input.select(); openFleetList(''); });           // empty search = every name
+  input.addEventListener('input', () => openFleetList(input.value));
+  input.addEventListener('keydown', e => {
+    const open = !list.classList.contains('hidden');
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!open) openFleetList('');
+      setFleetActive(fleetActive + (e.key === 'ArrowDown' ? 1 : -1));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();                                                                 // never submits the form from here
+      if (open && fleetActive >= 0) chooseName(fleetItems()[fleetActive].dataset.name);
+    } else if (e.key === 'Escape' && open) {
+      e.stopPropagation(); closeFleetList(); input.value = currentVehicleLabel();
+    }
+  });
+  list.addEventListener('mousedown', e => {                                               // mousedown: runs before the input loses focus
+    const it = e.target.closest('.combo-item');
+    if (it) { e.preventDefault(); chooseName(it.dataset.name); }
+  });
+  input.addEventListener('blur', () => { closeFleetList(); input.value = currentVehicleLabel(); });
+})();
+
+/* ── REGISTER VEHICLE: saves to the fleet, creates no trip ── */
+function setRegMsg(text, ok) { const el = $('rMsg'); el.textContent = text; el.classList.toggle('ok', !!ok); }
+function openRegisterForm() {
+  $('registerForm').reset(); setRegMsg('', false);
+  $('registerModal').classList.remove('hidden');
+  $('rPlate').focus();
+}
+function closeRegisterForm() { $('registerModal').classList.add('hidden'); }
+
+async function submitRegister(e) {
+  e.preventDefault();
+  const plate = $('rPlate').value.trim(), model = $('rModel').value.trim();
+  const seats = Number($('rSeats').value);
+  const errors = [];
+  if (!plate) errors.push('Plate number is required.');
+  else if (!PLATE_RE.test(plate)) errors.push('Plate number must be 3 to 15 characters: letters, digits and hyphens only.');
+  if (!model) errors.push('Vehicle name is required.');
+  if (!Number.isInteger(seats) || seats < 1 || seats > 60) errors.push('Number of seats must be a whole number from 1 to 60.');
+  if (errors.length) { setRegMsg(errors.join('\n'), false); return; }
+  const btn = $('registerBtn');
+  btn.disabled = true; btn.textContent = 'Saving…'; setRegMsg('', false);
+  try {
+    const r = await fetch(`${API}/api/fleet`, { method:'POST', headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ plate_number: plate, model_name: model, seat_count: seats }) });
+    const d = await r.json();
+    if (!r.ok) { setRegMsg(serverMessage(d, 'Could not register the vehicle'), false); return; }
+    if (isAdmin()) loadAdminVehicles();                               // the Vehicles page shows it too
+    fleet = sortFleet([...fleet.filter(v => v.plate_number !== d.plate_number), d]);       // the dropdown has it now, no reload
+    setRegMsg(`Registered ${fleetLabel(d)} (${d.seat_count} seats).`, true);
+    $('registerForm').reset();
+    $('rPlate').focus();
+  } catch(err) {
+    setRegMsg('Could not reach the server — is it running (python app.py)?', false);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Register Vehicle';
+  }
+}
+
+function startDashboard() {
+  if (dashboardStarted) { fetchAll(); return; }     // logging in again must not build a second map / timer
+  dashboardStarted = true;
+  renderAll();
+  setTimeout(async () => {
+    await loadConfig();
+    initMap();
+    fetchAll();
+    setInterval(fetchAll, REFRESH_MS);
+    checkHealth();
+    setInterval(checkHealth, HEALTH_MS);
+  }, 100);
+}
+
+initAuth();                                  // last: everything it may call is defined above
+</script>
+</body>
+</html>

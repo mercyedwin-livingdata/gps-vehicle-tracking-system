@@ -1,0 +1,210 @@
+# ai_module.py
+# ── GENERATE TRAINING DATA ───────────────────────
+# This simulates historical GPS travel data
+# In a real system this would come from your database
+def generate_training_data():
+    np.random.seed(42)
+    records = []
+
+    for _ in range(500):
+        hour        = np.random.randint(0, 24)
+        day_of_week = np.random.randint(0, 7)   # 0=Monday, 6=Sunday
+        speed       = np.random.randint(5, 100)
+        fuel        = np.random.randint(10, 100)
+        is_weekend  = 1 if day_of_week >= 5 else 0
+
+        # Rush hour logic: 7-9am and 4-7pm on weekdays
+        is_rush = 1 if (
+            not is_weekend and
+            ((7 <= hour <= 9) or (16 <= hour <= 19))
+        ) else 0
+
+        # Label traffic condition based on rules
+        if is_rush and speed < 20:
+            condition = 'heavy'
+        elif is_rush and speed < 40:
+            condition = 'moderate'
+        elif speed < 25:
+            condition = 'moderate'
+        else:
+            condition = 'clear'
+
+        records.append({
+            'hour':        hour,
+            'day_of_week': day_of_week,
+            'speed':       speed,
+            'fuel':        fuel,
+            'is_weekend':  is_weekend,
+            'is_rush':     is_rush,
+            'condition':   condition,
+        })
+
+    return pd.DataFrame(records)
+
+
+# ── TRAIN THE MODEL ──────────────────────────────
+def train_model():
+    print("Training AI traffic prediction model...")
+    df = generate_training_data()
+
+    # Features the AI uses to make predictions
+    features = ['hour', 'day_of_week', 'speed', 'fuel', 'is_weekend', 'is_rush']
+    X = df[features]
+    y = df['condition']
+
+    # Encode labels: clear=0, moderate=1, heavy=2
+    encoder = LabelEncoder()
+    y_encoded = encoder.fit_transform(y)
+
+    # Train Random Forest — good for this type of pattern data
+    model = RandomForestClassifier(
+        n_estimators=100,
+        max_depth=8,
+        random_state=42
+    )
+    model.fit(X, y_encoded)
+
+    # Save model and encoder to disk
+    with open(MODEL_PATH, 'wb') as f:
+        pickle.dump({'model': model, 'encoder': encoder}, f)
+
+    print(f"Model trained and saved to {MODEL_PATH}")
+    return model, encoder
+# ... (omitted)
+# ── PREDICT TRAFFIC FOR A VEHICLE ───────────────
+def predict_traffic(vehicle_data, location_history):
+    """
+    vehicle_data     : dict with keys: id, name, speed, fuel, status
+    location_history : list of dicts with keys: speed, timestamp
+    Returns          : dict with prediction, suggestion, risk, confidence
+    """
+
+    if len(location_history) < 2:
+        return {
+            'prediction':  'Not enough location history yet',
+            'suggestion':  'Keep collecting GPS data',
+            'risk':        'unknown',
+            'confidence':  0,
+            'avg_speed':   0,
+            'rush_hour':   False,
+        }
+
+    # ── PREPARE FEATURES ────────────────────────
+    now         = datetime.now()
+    hour        = now.hour
+    day_of_week = now.weekday()   # 0=Monday
+    is_weekend  = 1 if day_of_week >= 5 else 0
+    is_rush     = 1 if (
+        not is_weekend and
+        ((7 <= hour <= 9) or (16 <= hour <= 19))
+    ) else 0
+
+    # Average speed from recent history
+    speeds    = [float(h.get('speed', 0)) for h in location_history]
+    avg_speed = sum(speeds) / len(speeds) if speeds else 0
+    fuel      = float(vehicle_data.get('fuel', 50))
+
+    features = np.array([[
+        hour,
+        day_of_week,
+        avg_speed,
+        fuel,
+        is_weekend,
+        is_rush,
+    ]])
+
+    # ── RUN MODEL ───────────────────────────────
+    model, encoder = load_model()
+    prediction_encoded = model.predict(features)[0]
+    probabilities      = model.predict_proba(features)[0]
+    confidence         = round(float(max(probabilities)) * 100, 1)
+
+    # Decode prediction back to label
+    condition = encoder.inverse_transform([prediction_encoded])[0]
+
+    # ── BUILD RESPONSE ──────────────────────────
+    risk_map = {
+        'clear':    'low',
+        'moderate': 'medium',
+        'heavy':    'high',
+    }
+
+    prediction_map = {
+        'clear':    'Route is clear — good driving conditions',
+        'moderate': 'Moderate congestion detected on current route',
+        'heavy':    'Heavy traffic detected — significant delays expected',
+    }
+
+    suggestion_map = {
+        'clear':    'Continue on current route — no delays expected',
+        'moderate': 'Monitor speed closely — possible slowdowns ahead',
+        'heavy':    'Consider alternative route to save time',
+    }
+
+    return {
+        'prediction':  prediction_map.get(condition, 'Unknown'),
+        'suggestion':  suggestion_map.get(condition, 'No suggestion'),
+        'risk':        risk_map.get(condition, 'unknown'),
+        'confidence':  confidence,
+        'avg_speed':   round(avg_speed, 1),
+        'rush_hour':   bool(is_rush),
+        'condition':   condition,
+        'hour':        hour,
+        'day_of_week': day_of_week,
+    }
+
+
+# ── ROUTE OPTIMIZATION SUGGESTION ───────────────
+def suggest_route(vehicle_data, risk_level):
+    """
+    Suggests an alternative route based on risk level
+    and vehicle location
+    """
+    vehicle_name = vehicle_data.get('name', 'Vehicle')
+    current_route = vehicle_data.get('route', 'Unknown route')
+
+    alternatives = {
+        'Onitsha → Awka': [
+            'Via Nkpor Junction → Enugu-Onitsha Expressway',
+            'Via Oba → Nnewi → Awka-Nnewi Road',
+        ],
+        'Ekwulobia → Nnewi': [
+            'Via Nnewi-Ekwulobia Road → Nkwo Nnewi',
+            'Via Awka → Onitsha-Owerri Road',
+        ],
+        'Ihiala → Onitsha': [
+            'Via Okija → Ozubulu → Nnewi → Oba',
+            'Via Onitsha-Owerri Road → Nkpor Junction',
+        ],
+        'Nkpor → Ozubulu': [
+            'Via Oba → Onitsha-Owerri Road',
+            'Via Nnewi → Okija Road',
+        ],
+        'Nnewi Depot': [
+            'Stay on current route — no alternative needed',
+        ],
+    }
+
+    alt_routes = alternatives.get(current_route, [])   # no data for this route -> no alternatives to show
+
+    if risk_level == 'high':
+        return {
+            'recommend_alternative': True,
+            'reason': f'Heavy traffic on {current_route}',
+            'alternatives': alt_routes,
+            'estimated_saving': '15–25 minutes',
+        }
+    elif risk_level == 'medium':
+        return {
+            'recommend_alternative': False,
+            'reason': f'Moderate traffic on {current_route}',
+            'alternatives': alt_routes,
+            'estimated_saving': '5–10 minutes if rerouted',
+        }
+    else:
+        return {
+            'recommend_alternative': False,
+            'reason': 'Route is clear',
+            'alternatives': [],
+            'estimated_saving': '0 minutes',
+        }

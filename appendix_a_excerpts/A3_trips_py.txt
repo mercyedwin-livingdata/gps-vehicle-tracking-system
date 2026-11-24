@@ -1,0 +1,292 @@
+# trips.py
+# ── SEAT LAYOUT ──────────────────────────────────
+def seat_labels(seat_count):
+    """Front seat beside the driver, then rows of three starting at Row 2.
+    7 seats -> Front, Row 2 - Left/Middle/Right, Row 3 - Left/Middle/Right.
+    The last row is partial when seat_count - 1 isn't a multiple of 3."""
+    labels = ['Front']
+    for i in range(seat_count - 1):
+        labels.append(f"Row {i // 3 + 2} - {SEAT_POSITIONS[i % 3]}")
+    return labels[:seat_count]
+# ... (omitted)
+def mark_arrived(cur, trip_id, vehicle_id, destination, now, delay_reason=None, location=None, note=None,
+                 fallback_reason=None):
+    """The one place a trip becomes 'arrived' (used by POST .../arrive and the simulator).
+    Guarded UPDATE: only moving/paused/stopped trips change. delay_minutes is the whole minutes
+    between scheduled_arrival and now (0 if early). delay_reason: an explicit one wins, then one
+    already stored, then fallback_reason - and the fallback is used only when the trip is actually late.
+    Returns False if the trip was not arrivable."""
+    cur.execute("""
+        UPDATE trips SET status = 'arrived', actual_arrival = %s,
+               delay_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, scheduled_arrival, %s)),
+               delay_reason = COALESCE(%s, delay_reason,
+                                       IF(TIMESTAMPDIFF(MINUTE, scheduled_arrival, %s) > 0, %s, NULL))
+        WHERE id = %s AND status IN ('moving','paused','stopped')
+    """, (now, now, delay_reason, now, fallback_reason, trip_id))
+    if cur.rowcount == 0:
+        return False
+    dest = config.TOWNS.get(destination)
+    set_vehicle_state(cur, vehicle_id, 'idle', 0, dest['lat'] if dest else None,
+                      dest['lng'] if dest else None, eta='Arrived')
+    cur.execute("""INSERT INTO trip_events (trip_id, event_type, location, event_time, note)
+                   VALUES (%s,'arrive',%s,%s,%s)""", (trip_id, location or destination, now, note))
+    return True
+# ... (omitted)
+def compute_kpis(cur, day):
+    """The numbers behind the dashboard's KPI cards for one date (used by /api/kpis and the day PDF)."""
+    cur.execute("""
+        SELECT COUNT(*) AS total_trips,
+               COUNT(DISTINCT CASE WHEN t.status <> 'cancelled' THEN t.vehicle_id END) AS vehicles_used,
+               COALESCE(SUM(t.status = 'arrived'), 0) AS arrived_trips,
+               COALESCE(SUM(t.status = 'arrived' AND t.delay_minutes <= %s), 0) AS on_time_trips,
+               COALESCE(SUM(t.delay_minutes > 0 OR (t.status IN ('moving','paused','stopped')
+                            AND TIMESTAMPDIFF(MINUTE, t.scheduled_arrival, %s) > 0)), 0) AS delayed_trips,
+               COALESCE(SUM(t.delay_minutes), 0) AS total_delay_minutes,
+               AVG(CASE WHEN t.status = 'arrived' THEN t.delay_minutes END) AS avg_delay_minutes,
+               AVG(t.estimated_duration_minutes) AS avg_estimated_duration_minutes,
+               COALESCE(SUM(CASE WHEN t.status <> 'cancelled' THEN v.seat_count END), 0) AS seat_capacity
+        FROM trips t JOIN vehicles v ON v.id = t.vehicle_id
+        WHERE t.trip_date = %s
+    """, (ON_TIME_GRACE_MINUTES, datetime.now(), day))
+    k = cur.fetchone()
+    cur.execute("""
+        SELECT COUNT(*) AS booked, COUNT(p.alighted_at) AS alighted
+        FROM passengers p JOIN trips t ON t.id = p.trip_id
+        WHERE t.trip_date = %s AND t.status <> 'cancelled'
+    """, (day,))
+    p = cur.fetchone()
+    summary = trip_status_summary(cur, day)
+
+    arrived = int(k['arrived_trips'])
+    capacity = int(k['seat_capacity'])
+    return {
+        'date': day.isoformat(),
+        'total_trips': k['total_trips'],
+        'trips_by_status': {s: summary[s] for s in
+                            ('scheduled', 'moving', 'paused', 'stopped', 'arrived', 'cancelled')},
+        'vehicles_used': k['vehicles_used'],
+        'vehicles_on_the_road': summary['moving'] + summary['paused'] + summary['stopped'],
+        'delayed_trips': int(k['delayed_trips']),
+        'total_delay_minutes': int(k['total_delay_minutes']),
+        'avg_delay_minutes': _num(k['avg_delay_minutes'], 1),
+        'avg_estimated_duration_minutes': _num(k['avg_estimated_duration_minutes'], 1),
+        'on_time_rate_pct': round(int(k['on_time_trips']) * 100 / arrived, 1) if arrived else None,
+        'passengers_booked': p['booked'],
+        'passengers_alighted': p['alighted'],
+        'passengers_onboard': p['booked'] - p['alighted'],
+        'seat_occupancy_pct': round(p['booked'] * 100 / capacity, 1) if capacity else None,
+    }
+# ... (omitted)
+    # ---------- create a trip (+ vehicle if the plate is new, + passengers) ----------
+    @app.route('/api/trips', methods=['POST'])
+    def create_trip():
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return _error('Request body must be a JSON object')
+
+        errors = []
+        plate_raw = _text(data.get('plate_number'), 100)
+        if not plate_raw:
+            errors.append('plate_number is required')
+        elif not PLATE_RE.fullmatch(plate_raw):
+            errors.append('plate_number must be 3 to 15 characters: letters, digits and hyphens only')
+        plate = plate_raw.upper()
+
+        towns = ', '.join(config.TOWNS)
+        origin, destination = _town(data.get('origin')), _town(data.get('destination'))
+        if origin is None:
+            errors.append(f'origin must be one of: {towns}')
+        if destination is None:
+            errors.append(f'destination must be one of: {towns}')
+        if origin and origin == destination:
+            errors.append('origin and destination must be different towns')
+
+        departure = arrival = None
+        try:
+            departure = _parse_datetime(data.get('scheduled_departure'), 'scheduled_departure')
+        except ValueError as e:
+            errors.append(str(e))
+        try:
+            arrival = _parse_datetime(data.get('scheduled_arrival'), 'scheduled_arrival')
+        except ValueError as e:
+            errors.append(str(e))
+        if departure and arrival and arrival <= departure:
+            errors.append('scheduled_arrival must be after scheduled_departure')
+
+        passengers_in = data.get('passengers', [])
+        if not isinstance(passengers_in, list):
+            errors.append('passengers must be a list')
+            passengers_in = []
+# ... (omitted)
+        if errors:
+            cur.close()
+            return _error('Validation failed', 400, details=errors)
+
+        if vehicle:                     # the plate identifies the vehicle; never silently ignore a different name or seat count
+            conflict = registered_mismatch(plate, vehicle, data)
+            if conflict:
+                cur.close()
+                return _error(conflict, 409, registered={'plate_number': plate, 'model_name': vehicle['model_name'],
+                                                         'seat_count': vehicle['seat_count']})
+        # who drives THIS trip: what the request says, else the vehicle's usual driver
+        trip_driver = _text(data.get('driver_name'), 100) or (vehicle['driver_name'] if vehicle else None)
+
+        duration = int((arrival - departure).total_seconds() // 60)
+# ... (omitted)
+            cur.execute("""
+                INSERT INTO trips
+                (vehicle_id, driver_name, origin, destination, scheduled_departure, scheduled_arrival,
+                 estimated_duration_minutes, status, trip_date)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,'scheduled',%s)
+            """, (vehicle_id, trip_driver, origin, destination, departure, arrival, duration, departure.date()))
+            trip_id = cur.lastrowid
+# ... (omitted)
+        trip = _load_trips(cur, ' WHERE t.id = %s', (trip_id,))[0]
+        cur.close()
+        trip['seat_layout'] = seat_labels(seat_count)
+        return jsonify(trip), 201
+# ... (omitted)
+    @app.route('/api/trips/<int:trip_id>/start', methods=['POST'])
+    def start_trip(trip_id):
+        data = request.get_json(silent=True) or {}
+        now = datetime.now().replace(microsecond=0)
+        cur = dict_cursor()
+        cur.execute("SELECT vehicle_id, origin, destination FROM trips WHERE id = %s", (trip_id,))
+        trip = cur.fetchone()
+        if trip is None:
+            cur.close()
+            return _error('Trip not found', 404)
+        result, other = begin_trip(cur, trip_id, trip['vehicle_id'], trip['origin'], trip['destination'], now,
+                                   note=_text(data.get('note') or data.get('reason'), 255) or None,
+                                   location=_text(data.get('location'), 100) or None)
+        if result == 'busy':
+            mysql.connection.rollback()
+            cur.close()
+            return _error(f"This vehicle is already on the road with trip #{other}", 409)
+        if result == 'not_scheduled':
+            return reject_transition(cur, trip_id, 'start', ('scheduled',))
+        mysql.connection.commit()
+        started = _load_trips(cur, ' WHERE t.id = %s', (trip_id,))[0]
+        cur.close()
+        return jsonify(started)
+
+    @app.route('/api/trips/<int:trip_id>/pause', methods=['POST'])
+    def pause_trip(trip_id):
+        return change_status(trip_id, 'pause', ('moving',), 'paused',
+                             on_success=lambda cur, t: set_vehicle_state(cur, t['vehicle_id'], 'idle', 0))
+
+    @app.route('/api/trips/<int:trip_id>/resume', methods=['POST'])
+    def resume_trip(trip_id):
+        return change_status(trip_id, 'resume', ('paused', 'stopped'), 'moving',
+                             on_success=lambda cur, t: set_vehicle_state(cur, t['vehicle_id'], 'moving', 0))
+
+    @app.route('/api/trips/<int:trip_id>/stop', methods=['POST'])
+    def stop_trip(trip_id):
+        return change_status(trip_id, 'stop', ('moving', 'paused'), 'stopped',
+                             on_success=lambda cur, t: set_vehicle_state(cur, t['vehicle_id'], 'idle', 0))
+
+    @app.route('/api/trips/<int:trip_id>/cancel', methods=['POST'])
+    def cancel_trip(trip_id):
+        return change_status(trip_id, 'cancel', ('scheduled',), 'cancelled')
+
+    @app.route('/api/trips/<int:trip_id>/arrive', methods=['POST'])
+    def arrive_trip(trip_id):
+        data = request.get_json(silent=True) or {}
+        now = datetime.now().replace(microsecond=0)
+        cur = dict_cursor()
+        cur.execute("SELECT vehicle_id, destination FROM trips WHERE id = %s", (trip_id,))
+        trip = cur.fetchone()
+        if trip is None:
+            cur.close()
+            return _error('Trip not found', 404)
+        ok = mark_arrived(cur, trip_id, trip['vehicle_id'], trip['destination'], now,
+                          delay_reason=_text(data.get('delay_reason'), 255) or None,
+                          location=_text(data.get('location'), 100) or None,
+                          note=_text(data.get('note'), 255) or None)
+        if not ok:
+            return reject_transition(cur, trip_id, 'arrive', ('moving', 'paused', 'stopped'))
+        mysql.connection.commit()
+        result = _load_trips(cur, ' WHERE t.id = %s', (trip_id,))[0]
+        cur.close()
+        return jsonify(result)
+# ... (omitted)
+    # ---------- daily report ----------
+    @app.route('/api/trips/report')
+    def trips_report():
+        try:
+            day = day_arg()
+        except ValueError as e:
+            return _error(str(e))
+        cur = dict_cursor()
+        trips = _load_trips(cur, ' WHERE t.trip_date = %s', (day,), with_events=True)
+        summary = trip_status_summary(cur, day)
+        cur.close()
+        return jsonify({
+            'date': day.isoformat(),
+            'summary': summary,
+            'passengers_total': sum(t['passengers_total'] for t in trips),
+            'passengers_alighted': sum(t['passengers_alighted'] for t in trips),
+            'trips': trips,
+        })
+
+    # ---------- PDF: one trip ----------
+    @app.route('/api/trips/<int:trip_id>/report.pdf')
+    def trip_report_pdf(trip_id):
+        cur = dict_cursor()
+        found = _load_trips(cur, ' WHERE t.id = %s', (trip_id,), with_events=True)
+        cur.close()
+        if not found:
+            return _error('Trip not found', 404)
+        t = found[0]
+        try:
+            data = build_trip_pdf(t)
+        except Exception:
+            app.logger.exception('trip PDF failed')
+            return _error('Could not build the PDF', 500)
+        return _pdf_response(data, f"{FILE_PREFIX}_Trip_Report_{t['plate_number']}_{t['trip_date']}.pdf")
+# ... (omitted)
+    # ---------- EMAIL: share a PDF ----------
+    def send_report_email(to, subject, body, build_pdf, filename):
+        """Shared by both email routes: rate limit -> settings -> PDF -> send. Always answers with JSON."""
+        wait = email_wait_seconds(request.remote_addr or 'unknown')
+        if wait:
+            return _error(f'Too many emails: the limit is {EMAIL_LIMIT} per minute. Try again in {wait} seconds.',
+                          429, retry_after_seconds=wait)
+        cfg, missing = smtp_settings()
+        if cfg is None:
+            return _error('email is not set up on this server', 503, missing=missing)
+        try:
+            pdf = build_pdf()
+        except Exception:
+            app.logger.exception('email PDF failed')
+            return _error('Could not build the PDF', 500)
+        ok, problem, status = deliver_report(cfg, to, strip_emoji(subject), strip_emoji(body), pdf, filename)
+        if not ok:
+            app.logger.warning('email to %s failed: %s', to, problem)
+            return _error(problem, status)
+        return jsonify({'message': f'Sent to {to}', 'email': to})
+
+    def email_from_body():
+        data = request.get_json(silent=True)
+        value = data.get('email') if isinstance(data, dict) else None
+        return value, email_problem(value)
+
+    @app.route('/api/trips/<int:trip_id>/report/email', methods=['POST'])
+    def email_trip_report(trip_id):
+        to, problem = email_from_body()
+        if problem:
+            return _error(problem, 400)
+        cur = dict_cursor()
+        found = _load_trips(cur, ' WHERE t.id = %s', (trip_id,), with_events=True)
+        cur.close()
+        if not found:
+            return _error('Trip not found', 404)
+        t = found[0]
+        body = (f"Hello,\n\nPlease find the trip report attached as a PDF.\n\n"
+                f"Vehicle: {t['model_name']} ({t['plate_number']})\nDriver: {t['driver_name']}\n"
+                f"Route: {t['origin']} to {t['destination']}\n"
+                f"Status: {t['status'].upper()}" + (f" (delay: {t['late_minutes']} min)" if t['late_minutes'] else "") +
+                f"\n\n{config.COMPANY_NAME}\n")
+        return send_report_email(to, f"{config.COMPANY_NAME} trip report - {t['plate_number']} - {t['trip_date']}", body,
+                                 lambda: build_trip_pdf(t),
+                                 f"{FILE_PREFIX}_Trip_Report_{t['plate_number']}_{t['trip_date']}.pdf")

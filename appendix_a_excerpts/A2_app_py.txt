@@ -1,0 +1,175 @@
+# app.py
+from flask import Flask, jsonify, request
+from flask_mysqldb import MySQL
+from flask_cors import CORS
+from datetime import datetime
+from ai_module import predict_traffic, suggest_route
+import config
+import MySQLdb.cursors
+from trips import register_trip_routes, trip_status_summary, parse_date_arg, active_vehicles
+from simulator import run_simulator
+import os
+import threading
+
+app = Flask(__name__)
+CORS(app)
+
+simulator_thread = None
+simulator_lock = threading.Lock()
+
+def start_simulator_thread():
+    global simulator_thread
+    with simulator_lock:
+        if simulator_thread is None or not simulator_thread.is_alive():
+            simulator_thread = threading.Thread(target=run_simulator, daemon=True)
+            simulator_thread.start()
+
+# ── DATABASE CONFIG ──────────────────────────────
+app.config['MYSQL_HOST']     = 'localhost'
+app.config['MYSQL_USER']     = 'root'
+app.config['MYSQL_PASSWORD'] = ''
+app.config['MYSQL_DB']       = 'gps_tracking'
+
+mysql = MySQL(app)
+register_trip_routes(app, mysql)
+# ... (omitted)
+# ── APP CONFIG (company name + map centre for the dashboard) ──
+@app.route('/api/config')
+def get_config():
+    return jsonify({
+        'company_name': config.COMPANY_NAME,
+        'map_center':   config.MAP_CENTER,
+        'towns':        config.TOWNS,
+    })
+
+
+# ── VEHICLES ON THE ROAD ─────────────────────────
+# Only vehicles with a moving / paused / stopped trip on ?date= (default today) are returned.
+@app.route('/api/vehicles')
+def get_vehicles():
+    try:
+        day = parse_date_arg(request.args.get('date'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    cur = mysql.connection.cursor(MySQLdb.cursors.DictCursor)
+    vehicles = active_vehicles(cur, day)
+    cur.close()
+    return jsonify(vehicles)
+# ... (omitted)
+@app.route('/api/vehicles/<int:vehicle_id>/refuel', methods=['POST'])
+def refuel_vehicle(vehicle_id):
+    """Refuel a vehicle and optionally start it moving again."""
+    data = request.get_json() or {}
+    amount = data.get('amount', 50)
+    start   = bool(data.get('start', False))
+
+    # sanitize
+    try:
+        amount = float(amount)
+    except Exception:
+        amount = 50
+    amount = max(0, min(100, amount))
+
+    status = 'moving' if start else 'idle'
+
+    cur = mysql.connection.cursor()
+    cur.execute("""
+        UPDATE vehicles
+        SET fuel = LEAST(100, GREATEST(0, fuel + %s)), status = %s
+        WHERE id = %s
+    """, (amount, status, vehicle_id))
+    mysql.connection.commit()
+
+    # rowcount is 0 when nothing changed (e.g. already at 100), so confirm existence by reading back
+    cur.execute("SELECT fuel FROM vehicles WHERE id = %s", (vehicle_id,))
+    row = cur.fetchone()
+    cur.close()
+    if row is None:
+        return jsonify({'error': 'Vehicle not found'}), 404
+
+    return jsonify({'message': 'Vehicle refueled', 'vehicle_id': vehicle_id, 'fuel': round(float(row[0]), 1), 'status': status})
+# ... (omitted)
+# ── AI TRAFFIC PREDICTION ────────────────────────
+@app.route('/api/ai/predict/<int:vehicle_id>')
+def predict_traffic_route(vehicle_id):
+    cur = mysql.connection.cursor()
+
+    # Get vehicle data
+    cur.execute("SELECT * FROM vehicles WHERE id = %s", (vehicle_id,))
+    row = cur.fetchone()
+    if row is None:
+        return jsonify({'error': 'Vehicle not found'}), 404
+
+    vehicle_data = {
+        'id':     row[0], 'name':  row[1],
+        'speed':  row[5], 'fuel':  row[6],
+        'route':  row[9],
+    }
+
+    # Get location history
+    cur.execute("""
+        SELECT speed, timestamp FROM locations
+        WHERE vehicle_id = %s
+        ORDER BY timestamp DESC LIMIT 10
+    """, (vehicle_id,))
+    history_rows = cur.fetchall()
+    cur.close()
+
+    location_history = [
+        {'speed': r[0], 'timestamp': str(r[1])}
+        for r in history_rows
+    ]
+
+    # Run Scikit-learn AI prediction
+    result     = predict_traffic(vehicle_data, location_history)
+    route_info = suggest_route(vehicle_data, result['risk'])
+
+    return jsonify({
+        'vehicle_id':   vehicle_id,
+        'prediction':   result['prediction'],
+        'suggestion':   result['suggestion'],
+        'risk':         result['risk'],
+        'confidence':   result['confidence'],
+        'avg_speed':    result['avg_speed'],
+        'rush_hour':    result['rush_hour'],
+        'route_option': route_info,
+        'timestamp':    str(datetime.now()),
+    })
+
+    # simple AI logic using average speed
+    speeds = [row[2] for row in rows]
+    avg_speed = sum(speeds) / len(speeds)
+
+    hour = datetime.now().hour
+    is_rush_hour = (7 <= hour <= 9) or (16 <= hour <= 19)
+
+    if avg_speed < 20 and is_rush_hour:
+        prediction = 'Heavy traffic detected on current route'
+        suggestion = 'Use alternative route to save time'
+        risk       = 'high'
+    elif avg_speed < 35:
+        prediction = 'Moderate congestion detected'
+        suggestion = 'Monitor speed — possible delays ahead'
+        risk       = 'medium'
+    else:
+        prediction = 'Route is clear — good conditions'
+        suggestion = 'Continue on current route'
+        risk       = 'low'
+
+    return jsonify({
+        'vehicle_id':  vehicle_id,
+        'avg_speed':   round(avg_speed, 1),
+        'rush_hour':   is_rush_hour,
+        'prediction':  prediction,
+        'suggestion':  suggestion,
+        'risk':        risk,
+        'timestamp':   str(datetime.now())
+    })
+# ... (omitted)
+# ── RUN SERVER ───────────────────────────────────
+if __name__ == '__main__':
+    DEBUG = True  # set False to run without the reloader; the simulator starts either way
+    # With the debug reloader this file runs twice; only the child has WERKZEUG_RUN_MAIN set
+    if not DEBUG or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        start_simulator_thread()
+    app.run(debug=DEBUG, port=5000)

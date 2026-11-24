@@ -1,0 +1,265 @@
+// index.html
+const API = 'http://localhost:5000';
+const REFRESH_MS = 10000;          // the whole dashboard (map, cards, KPIs, alerts, report) refreshes together
+// ... (omitted)
+function submitLogin() {
+  const u = $('loginUser').value.trim();
+  const p = $('loginPass').value.trim();
+  const e = $('loginError');
+  if (!u || !p) { e.textContent = 'Please enter both username and password.'; return; }
+// ... (omitted)
+  e.textContent = '';
+  hideLoginScreen();
+  startDashboard();
+}
+// ... (omitted)
+/* A trip's colour: orange when it is running late, otherwise its own status colour. */
+function colorKey(status, delayed) { return delayed && ON_THE_ROAD.includes(status) ? 'delayed' : status; }
+
+/* Markers = vehicles on the road only; a vehicle with no moving/paused/stopped trip has no marker */
+function renderMarkers() {
+  if (!leafletMap) return;
+  const onRoad = new Set(vehicles.map(v => v.id));
+  Object.keys(leafletMarkers).forEach(id => {
+    if (!onRoad.has(Number(id))) { leafletMap.removeLayer(leafletMarkers[id]); delete leafletMarkers[id]; }
+  });
+
+  vehicles.forEach(v => {
+    const key   = colorKey(v.trip_status, v.delayed);
+    const color = solid(key);
+    const isSel = v.trip_id === selectedTripId;
+    const fc    = v.fuel > 60 ? 'moving' : v.fuel > 30 ? 'paused' : 'stopped';
+    const late  = v.delayed ? ` · late ${v.late_minutes} min` : '';
+    const popup = `<div class="map-popup">
+      <div class="popup-title">${ico('car')} ${esc(v.name)}</div>
+      <div class="popup-row"><span class="popup-label">Driver</span><span>${esc(v.driver)}</span></div>
+      <div class="popup-row"><span class="popup-label">Status</span><span style="color:var(--st-${key}-fg);font-weight:700;">${esc(v.trip_status.toUpperCase())}${esc(late)}</span></div>
+      <div class="popup-row"><span class="popup-label">Speed</span><span>${v.speed} km/h</span></div>
+      <div class="popup-row"><span class="popup-label">Fuel</span><span style="color:var(--st-${fc}-fg);font-weight:600;">${v.fuel}%</span></div>
+      <div class="popup-row"><span class="popup-label">Route</span><span>${esc(v.route)}</span></div>
+      <div class="popup-row"><span class="popup-label">ETA</span><span>${esc(v.eta)}</span></div>
+      <div class="popup-actions"><button class="theme-btn" onclick="refuelVehicle(${v.id})">Refuel</button></div>
+    </div>`;
+
+    if (leafletMarkers[v.id]) {
+      leafletMarkers[v.id].setLatLng([v.latitude, v.longitude]);
+      leafletMarkers[v.id].setIcon(makeVehicleIcon(color, isSel));
+      leafletMarkers[v.id].setPopupContent(popup);
+    } else {
+      leafletMarkers[v.id] = L.marker([v.latitude, v.longitude], { icon: makeVehicleIcon(color, isSel) })
+        .addTo(leafletMap)
+        .bindPopup(popup, { maxWidth:220 })
+        .on('click', () => { const cur = vehicles.find(x => x.id === v.id); if (cur) selectTrip(cur.trip_id); });
+    }
+  });
+}
+// ... (omitted)
+async function fetchAll() {
+  const token = ++fetchToken;               // ignore a slow response if the date changed meanwhile
+  const q = `date=${encodeURIComponent(selectedDate)}`;
+  try {
+    const [rep, veh, k] = await Promise.all([
+      getJSON(`${API}/api/trips/report?${q}`), getJSON(`${API}/api/vehicles?${q}`), getJSON(`${API}/api/kpis?${q}`)
+    ]);
+    // real AI prediction for every vehicle that is on the road
+    const ai = {};
+    await Promise.all(veh.map(async v => {
+      try { ai[v.id] = await getJSON(`${API}/api/ai/predict/${v.id}`); } catch(e) {}
+    }));
+    if (token !== fetchToken) return;
+    trips = rep.trips; summary = rep.summary; vehicles = veh; kpis = k; aiByVehicle = ai; flaskOnline = true;
+    setConn('connected', 'Connected to Flask — live GPS data from MySQL database');
+    if (!trips.some(x => x.id === selectedTripId)) selectedTripId = trips.length ? trips[0].id : null;
+  } catch(e) {
+    if (token !== fetchToken) return;
+    flaskOnline = false; trips = []; vehicles = []; summary = {}; kpis = null; aiByVehicle = {};
+    setConn('disconnected', 'Flask offline — start it with: python app.py');
+  }
+  renderAll();
+}
+// ... (omitted)
+/* ── RENDERING ── */
+function renderStats() {
+  const k = kpis;
+  $('kVehicles').textContent = k ? k.vehicles_used : '—';
+  $('kRoad').textContent     = k ? k.vehicles_on_the_road : '—';
+  $('kArrived').textContent  = k ? k.trips_by_status.arrived : '—';
+  $('kDelayed').textContent  = k ? k.delayed_trips : '—';
+  $('kOnTime').textContent   = k && k.on_time_rate_pct != null ? `${k.on_time_rate_pct}%` : '—';   // no arrived trips yet
+  $('kPax').textContent      = k ? `${k.passengers_alighted} / ${k.passengers_booked}` : '—';
+  ['scheduled','moving','paused','stopped','arrived','delayed'].forEach(s => { $('sum_' + s).textContent = summary[s] || 0; });
+}
+// ... (omitted)
+function renderSidebar() {
+  $('fleetLabel').textContent = `FLEET · ${summary.vehicles_total || 0} VEHICLES`;
+  const list = $('vehicleList');
+  if (!flaskOnline) {
+    list.innerHTML = `<div class="empty-state"><div class="empty-title">Server offline</div>Start the backend with <b>python app.py</b>.</div>`;
+    return;
+  }
+  if (!trips.length) {
+    const when = selectedDate === todayStr() ? 'today' : `on ${selectedDate}`;
+    list.innerHTML = `<div class="empty-state"><div class="empty-title">No vehicles on the road ${esc(when)}</div>Add a trip to put a vehicle on the road.</div>`;
+    return;
+  }
+  list.innerHTML = trips.map(t => {
+    const veh = vehicles.find(v => v.trip_id === t.id);
+    const canDrop = ON_THE_ROAD.includes(t.status);
+    const actions = (TRIP_ACTIONS[t.status] || [])
+      .map(([a, label]) => `<button class="theme-btn" onclick="event.stopPropagation();tripAction(${t.id},'${a}')">${label}</button>`).join('');
+    const pax = t.passengers.map(p => {
+      const end = p.alighted_at
+        ? `<span class="pax-done">${ico('check')} ${fmtTime(p.alighted_at)} · ${esc(p.alighted_location || p.drop_off_location)}</span>`
+        : canDrop ? `<button class="theme-btn pax-btn" onclick="event.stopPropagation();openDropForm(${t.id},${p.id})">Drop off</button>` : '';
+      return `<div class="vc-pax"><div><b>${esc(p.seat_label)}</b> — ${esc(p.passenger_name)}<div class="pax-plan">→ ${esc(p.drop_off_location)}</div></div>${end}</div>`;
+    }).join('');
+    return `
+    <div class="vehicle-card ${t.id===selectedTripId?'active':''}" onclick="selectTrip(${t.id})" style="border-left-color:${solid(colorKey(t.status, t.delayed))}">
+      <div class="vc-top"><span class="vc-name">${esc(t.model_name)}</span><span class="badges">${badgesFor(t)}</span></div>
+      <div class="vc-driver">${esc(t.driver_name)} · ${esc(t.plate_number)}</div>
+      <div class="vc-route">${esc(t.origin)} → ${esc(t.destination)} · ${fmtTime(t.scheduled_departure)}–${fmtTime(t.scheduled_arrival)}</div>
+      <div class="vc-route">${ico('users')} ${paxLabel(t)} · ${t.seat_count} seats</div>
+      ${veh ? fuelBar(veh.fuel) : ''}
+      ${pax ? `<div class="vc-paxlist">${pax}</div>` : ''}
+      ${actions ? `<div class="vc-actions">${actions}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+// ... (omitted)
+function renderReport(force = false) {
+  const body = $('reportBody');
+  const a = document.activeElement;
+  if (!force && a && a.tagName === 'INPUT' && body.contains(a)) return;      // don't wipe what the user is typing
+  $('reportDate').textContent = selectedDate;
+  if (!flaskOnline) { body.innerHTML = '<tr><td colspan="10" class="report-empty">Server offline</td></tr>'; return; }
+  if (!trips.length) { body.innerHTML = '<tr><td colspan="10" class="report-empty">No trips for this date</td></tr>'; return; }
+  body.innerHTML = trips.map(t => {
+    const delay = t.status === 'scheduled' || t.status === 'cancelled' ? '—'
+      : t.status === 'arrived' ? `${t.delay_minutes}` : (t.late_minutes ? `${t.late_minutes} so far` : '0');
+    return `<tr>
+      <td>${esc(t.driver_name)}</td>
+      <td>${esc(t.model_name)}<div class="cell-sub">${esc(t.plate_number)}</div></td>
+      <td>${esc(t.origin)} → ${esc(t.destination)}</td>
+      <td>${fmtTime(t.scheduled_arrival)}</td>
+      <td>${fmtTime(t.actual_arrival)}</td>
+      <td><span class="badges">${badgesFor(t)}</span></td>
+      <td class="${t.delayed ? 'delay-cell' : ''}">${delay}</td>
+      <td>${reportDelayCell(t)}</td>
+      <td class="pax-cell">${reportPassengers(t)}</td>
+      <td><div class="row-actions">
+        <button class="theme-btn pdf-btn" ${pdfBusy ? 'disabled' : ''} onclick="downloadTripPdf(${t.id})">Download PDF</button>
+        <button class="theme-btn" onclick="openShare(${t.id})">Share</button>
+      </div></td>
+    </tr>` + shareRowHtml(t);
+  }).join('');
+}
+// ... (omitted)
+async function tripAction(id, action) {
+  if (action === 'cancel' && !confirm('Cancel this trip?')) return;
+  if (action === 'arrive' && !confirm('Mark this trip as arrived now?')) return;
+  try {
+    const r = await fetch(`${API}/api/trips/${id}/${action}`, { method:'POST', headers:{ 'Content-Type':'application/json' }, body:'{}' });
+    const d = await r.json();
+    if (!r.ok) alert(d.error || 'That action failed');
+  } catch(e) {
+    alert('Action failed — is the server running?');
+  }
+  await fetchAll();
+}
+// ... (omitted)
+function collectForm() {
+  const errors = [];
+  const isNew = vehicleMode === 'new';
+  const plate = isNew ? $('fPlate').value.trim() : chosenPlate;
+  const registered = fleet.find(v => v.plate_number === chosenPlate);
+  const model = isNew ? $('fModel').value.trim() : (registered ? registered.model_name : ''), driver = $('fDriver').value.trim();
+  const origin = $('fOrigin').value, dest = $('fDest').value, dep = $('fDep').value, arr = $('fArr').value;
+  const seats = getSeats();
+
+  if (vehicleMode === 'none') errors.push('Choose a vehicle name from the list, or "+ New vehicle".');
+  else {
+    if (!plate) errors.push(isNew ? 'Plate number is required.' : 'Choose the plate number.');
+    else if (!PLATE_RE.test(plate)) errors.push('Plate number must be 3 to 15 characters: letters, digits and hyphens only.');
+    if (!model)  errors.push('Vehicle name is required.');
+    if (!seats)  errors.push('Number of seats must be a whole number from 1 to 60.');
+  }
+  if (!driver) errors.push("Driver's name is required.");
+  if (!origin) errors.push('Choose point A.');
+  if (!dest)   errors.push('Choose point B.');
+  if (origin && origin === dest) errors.push('Point A and point B must be different towns.');
+  if (!dep) errors.push('Departure time is required.');
+  if (!arr) errors.push('Expected arrival time is required.');
+  if (dep && arr && updateDuration() === null) errors.push('Expected arrival must be after the departure time.');
+
+  const passengers = [], usedSeats = new Set();
+  const rows = [...document.querySelectorAll('#paxRows .pax-row')];
+  if (seats && rows.length > seats) errors.push(`${rows.length} passengers exceed the ${seats} seats.`);
+  rows.forEach((r, i) => {
+    const name = r.querySelector('.pax-name').value.trim(), seat = r.querySelector('.pax-seat').value;
+    const drop = r.querySelector('.pax-drop').value;
+    if (!name) errors.push(`Passenger ${i + 1}: name is required.`);
+    if (!seat) errors.push(`Passenger ${i + 1}: no seat available.`);
+    else if (usedSeats.has(seat)) errors.push(`Passenger ${i + 1}: seat "${seat}" is already taken.`);
+    else usedSeats.add(seat);
+    passengers.push({ passenger_name: name, seat_label: seat, drop_off_location: drop || dest });
+  });
+
+  return { errors, isNew, payload: {
+    plate_number: plate, model_name: model, seat_count: seats, driver_name: driver,
+    origin, destination: dest,
+    scheduled_departure: dep.replace('T', ' '), scheduled_arrival: arr.replace('T', ' '),
+    passengers,
+  }};
+}
+
+const serverMessage = (d, fallback) => (d.details && d.details.length ? d.details : [d.error || fallback]).join('\n');
+
+async function submitAddForm(e) {
+  e.preventDefault();
+  const out = $('formError');
+  const { errors, payload, isNew } = collectForm();
+  if (errors.length) { out.textContent = errors.join('\n'); return; }
+  out.textContent = '';
+  const btn = $('submitBtn');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  let registered = false;
+  try {
+    if (isNew) {                              // "+ New vehicle": register it first, then create the trip
+      const rv = await fetch(`${API}/api/fleet`, { method:'POST', headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ plate_number: payload.plate_number, model_name: payload.model_name, seat_count: payload.seat_count, driver_name: payload.driver_name }) });
+      const dv = await rv.json();
+      if (!rv.ok) { out.textContent = serverMessage(dv, 'Could not register the vehicle'); return; }   // no trip is created
+      registered = true;
+      fleet = sortFleet([...fleet.filter(v => v.plate_number !== dv.plate_number), dv]);
+      selectFleetVehicle(dv);                 // the form now shows it as a registered vehicle, so a retry won't register it twice
+      $('fDriver').value = payload.driver_name;
+    }
+    const r = await fetch(`${API}/api/trips`, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload) });
+    const d = await r.json();
+    if (!r.ok) {
+      out.textContent = (registered ? `Vehicle ${payload.plate_number} was registered, but the trip could not be created:\n` : '') + serverMessage(d, 'Could not save the trip');
+      return;
+    }
+    closeAddForm();
+    selectedDate = d.trip_date;             // show the day the trip belongs to
+    $('datePicker').value = selectedDate;
+    selectedTripId = d.id;
+    await fetchAll();
+  } catch(err) {
+    out.textContent = 'Could not reach the server — is it running (python app.py)?';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Create Trip';
+  }
+}
+// ... (omitted)
+function startDashboard() {
+  if (dashboardStarted) { fetchAll(); return; }     // logging in again must not build a second map / timer
+  dashboardStarted = true;
+  renderAll();
+  setTimeout(async () => {
+    await loadConfig();
+    initMap();
+    fetchAll();
+    setInterval(fetchAll, REFRESH_MS);
+  }, 100);
+}
